@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">CaptionForge</string>
+    <string name="home_subtitle">Auto AI Subtitles &amp; Cinematic Video Studio</string>
+    <string name="new_project">New Project</string>
+    <string name="recent_projects">Recent Projects</string>
+    <string name="export_video">Export</string>
+    <string name="ai_captions">AI Captions</string>
+    <string name="configure_server">Configure Server</string>
+</resources>

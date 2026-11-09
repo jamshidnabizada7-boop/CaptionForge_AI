@@ -1,0 +1,8 @@
+{
+  "name": "CaptionForge",
+  "description": "AI video subtitle editor and cinematic motion graphics studio with multi-script RTL support for Android.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
