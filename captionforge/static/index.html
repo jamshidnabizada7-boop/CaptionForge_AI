@@ -1,0 +1,33 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090611"><meta name="apple-mobile-web-app-capable" content="yes">
+<title>CaptionForge – AI Video Captions</title>
+<link rel="manifest" href="/static/manifest.json"><link rel="stylesheet" href="/static/styles.css">
+</head><body>
+<div class="ambient a"></div><div class="ambient b"></div>
+<main class="phone-shell">
+  <section id="home" class="screen">
+   <div class="home-header"><button class="circle" id="settingsBtn" aria-label="Settings">⚙</button><span class="appmark">▣</span><button class="circle" id="helpBtn" aria-label="Help">?</button></div>
+   <div class="brand-small">MAGIC STUDIO</div><h1>Auto subtitles,<br><em>beautifully styled</em></h1>
+   <label for="videoInput" class="new-project cardbtn"><span class="plus-round">+</span><span><b>New project</b><small>Auto subtitles, beautifully styled</small></span><span class="chev">›</span></label>
+   <div class="premium cardbtn"><span class="premium-icon">✦</span><span><b>AI-powered editing</b><small>Video captions in many languages</small></span><span class="premium-tag">STUDIO</span></div>
+   <div class="intro-icon">▤</div><h3>Make your videos stand out</h3><p class="intro-text">Drop in a video — the AI subtitle editor handles the timing, styles, translations, and professional exports.</p>
+   <div class="section-heading"><h3>Your projects</h3><button id="refreshProjects">Refresh</button></div><div id="projectsList" class="projects-list"><div class="muted">No projects yet</div></div>
+   <input id="videoInput" accept="video/mp4,video/quicktime,video/webm,video/x-m4v,video/x-matroska" type="file" hidden>
+  </section>
+  <section id="editor" class="screen hidden">
+   <header class="editor-header"><button class="circle" id="backBtn" aria-label="Back">‹</button><span class="project-name" id="projectName">Project</span><button class="circle small" id="undoBtn" title="Undo">↶</button><button class="circle small" id="redoBtn" title="Redo">↷</button><select id="resolution" title="Export resolution"><option value="480">480p</option><option value="720" selected>720p</option><option value="1080">1080p</option></select><button class="export-button" id="exportBtn">⇧ Export</button></header>
+   <div class="editor-tip" id="editorTip">✦ Your video, your captions, your style.</div>
+   <div class="preview-area"><div class="size-control"><span>Aa</span><input id="sizeRange" type="range" orient="vertical" min="14" max="55" value="25"><b id="sizeValue">25</b></div>
+    <div class="video-frame" id="videoFrame"><video id="video" playsinline preload="metadata"></video><div id="captionLayer" class="caption-layer"></div><div id="videoPlaceholder" class="video-placeholder">▣</div></div>
+    <div class="side-control"><button id="quickSettings" title="Track settings">☷</button><button id="quickVoice" title="Clear voice">≋</button></div></div>
+   <div class="play-row"><button class="play-btn" id="playBtn" aria-label="Play / Pause">▶</button><button class="sound-btn" id="soundBtn">🔊</button><span class="playtime"><b id="currentTime">00:00.0</b><span> / <span id="totalTime">00:00</span></span></span><button class="add-btn" id="addBtn" title="Add caption">+</button></div>
+   <div class="timeline-area"><div class="ruler" id="ruler"><div id="rulerMarks" class="ruler-marks"></div><div class="playhead"></div></div><div class="tracks-scroll" id="tracksScroll"><div id="timelineTracks"></div></div></div>
+   <div class="panel-heading"><h3 id="panelTitle">Caption style</h3><button id="closePanel" aria-label="Close panel">×</button></div><div class="options-panel" id="optionsPanel"></div>
+   <nav class="tool-nav" id="toolbar"></nav>
+  </section>
+</main>
+<div class="toast hidden" id="toast"></div><div class="loading-overlay hidden" id="loading"><div class="spinner"></div><div id="loadingTitle">Processing</div><p id="loadingText">Preparing your video...</p></div>
+<div class="dialog hidden" id="dialog"><div class="dialog-body"><h3 id="dialogTitle"></h3><p id="dialogText"></p><div class="dialog-buttons"><button id="dialogCancel">Cancel</button><button id="dialogOk">OK</button></div></div></div>
+<input type="file" id="srtInput" accept=".srt,.vtt" hidden>
+<script src="/static/app.js" defer></script></body></html>

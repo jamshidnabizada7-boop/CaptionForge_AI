@@ -1,0 +1,39 @@
+# Flutter & Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.pub-cache/
+.pub/
+
+# Android
+captionforge_mobile/android/.gradle/
+captionforge_mobile/android/local.properties
+captionforge_mobile/android/app/release/
+*.apk
+*.aab
+
+# iOS
+captionforge_mobile/ios/.symlinks/
+captionforge_mobile/ios/Pods/
+captionforge_mobile/ios/Podfile.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+captionforge/.venv/
+captionforge/data/
+captionforge/.pytest_cache/
+
+# IDE & OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Archives & Temporary Expansion
+*.zip
+references_expanded/
+

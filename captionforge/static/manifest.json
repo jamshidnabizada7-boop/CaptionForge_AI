@@ -1,0 +1,23 @@
+{
+  "name": "CaptionForge \u2013 AI Video Subtitle Editor",
+  "short_name": "CaptionForge",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090611",
+  "theme_color": "#090611",
+  "description": "Make videos with auto captions, styles and translations.",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
