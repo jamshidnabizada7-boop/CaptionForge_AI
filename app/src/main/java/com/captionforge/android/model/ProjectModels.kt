@@ -144,38 +144,38 @@ object StylePresetCatalog {
             category = "3-Tier RTL",
             badgeText = "3-TIER REF #1",
             previewSample = "ویزای تحصیلی • فنلاند • بدون مدرک زبان",
-            description = "Three-tier Persian kinetic layout: white top kicker, bold orange-amber 3D hero headline with dark outline & warm glow, and gold/white bottom phrase.",
+            description = "Three-tier Persian kinetic layout from Reference Video 1: crisp white top line, massive orange-gold 3D hero headline with dark extrusion & optical flare, and white bottom line (no boxy background).",
             defaultSfx = "Punchy Pop",
             style = SubtitleStyle(
                 preset = "Cinematic Orange Persian",
                 font = "Vazirmatn",
                 fontWeight = 900,
-                fontSize = 31.0,
+                fontSize = 32.0,
                 textColor = "#FF7A00",
                 secondaryColor = "#FFB800",
-                tertiaryColor = "#FF3D00",
+                tertiaryColor = "#D93800",
                 gradient = true,
                 bgColor = "#140D22",
-                bgEnabled = true,
-                bgShape = "Rounded",
-                bgOpacity = 86,
-                outline = 4.0,
+                bgEnabled = false,
+                bgShape = "None",
+                bgOpacity = 0,
+                outline = 4.5,
                 outlineColor = "#090612",
-                shadowDepth = 5.0,
-                shadowBlur = 8.0,
+                shadowDepth = 6.0,
+                shadowBlur = 10.0,
                 shadowColor = "#000000",
-                extrusion3D = 3.5,
+                extrusion3D = 5.5,
                 xPos = 0.50,
-                yPos = 0.70,
+                yPos = 0.72,
                 animation = "Pop",
                 exitAnimation = "Scale Down",
                 karaoke = true,
-                glow = 6.5,
+                glow = 7.5,
                 glowColor = "#FF7A00",
                 threeTierLayout = true,
                 tier1Color = "#FFFFFF",
                 tier2Color = "#FF7A00",
-                tier3Color = "#FACC15"
+                tier3Color = "#FFFFFF"
             )
         ),
         StylePresetItem(
@@ -982,7 +982,7 @@ object SrtParser {
 
 object SampleProjectsFactory {
     fun createVideo1ShowcaseProject(): Project {
-        val duration = 5.0
+        val duration = 12.0
         val flagshipStyle = StylePresetCatalog.findByNameOrId("orange_persian_kinetic")!!.style
         return Project(
             id = "sample_project_video1",
@@ -997,12 +997,12 @@ object SampleProjectsFactory {
             aspectRatio = "9:16",
             effects = VideoEffects(
                 brightness = 0.02,
-                contrast = 1.08,
-                saturation = 1.15,
+                contrast = 1.06,
+                saturation = 1.12,
                 clearVoice = "Balanced",
                 sfx = "Punchy Pop",
                 sfxMode = "Both",
-                sfxVolume = 65
+                sfxVolume = 75
             ),
             tracks = listOf(
                 Track(
@@ -1015,56 +1015,70 @@ object SampleProjectsFactory {
                     captions = listOf(
                         CaptionCue(
                             id = "v1_c1",
-                            start = 0.1,
-                            end = 1.7,
+                            start = 0.25,
+                            end = 3.10,
                             text = "ویزای تحصیلی فنلاند بدون مدرک زبان",
                             tier1Text = "ویزای تحصیلی",
                             tier2Text = "فنلاند",
                             tier3Text = "بدون مدرک زبان",
                             entranceSfx = "Fast Whoosh",
                             words = listOf(
-                                WordTiming(0.10, 0.35, "ویزای", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
-                                WordTiming(0.35, 0.62, "تحصیلی", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
-                                WordTiming(0.62, 1.12, "فنلاند", customColor = "#FF7A00", scaleBoost = 1.35, animation = "Pop", sfx = "Punchy Pop", tier = 2),
-                                WordTiming(1.12, 1.40, "بدون", customColor = "#FACC15", scaleBoost = 1.10, animation = "Bounce", tier = 3),
-                                WordTiming(1.40, 1.55, "مدرک", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Pop", tier = 3),
-                                WordTiming(1.55, 1.70, "زبان", customColor = "#FF7A00", scaleBoost = 1.20, animation = "Glow", sfx = "Text Click", tier = 3)
+                                WordTiming(0.25, 0.70, "ویزای", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(0.70, 1.15, "تحصیلی", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(1.15, 2.05, "فنلاند", customColor = "#FF7A00", scaleBoost = 1.35, animation = "Pop", sfx = "Punchy Pop", tier = 2),
+                                WordTiming(2.05, 2.40, "بدون", customColor = "#FFFFFF", scaleBoost = 1.08, animation = "Bounce", tier = 3),
+                                WordTiming(2.40, 2.75, "مدرک", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Pop", tier = 3),
+                                WordTiming(2.75, 3.10, "زبان", customColor = "#FFB800", scaleBoost = 1.18, animation = "Glow", sfx = "Text Click", tier = 3)
                             )
                         ),
                         CaptionCue(
                             id = "v1_c2",
-                            start = 1.8,
-                            end = 3.4,
-                            text = "بهترین فرصت مهاجرت و کار دانشجویی",
-                            tier1Text = "بهترین فرصت",
-                            tier2Text = "مهاجرت",
-                            tier3Text = "و کار دانشجویی",
+                            start = 3.25,
+                            end = 6.30,
+                            text = "ویزه خانم نازیــــه است",
+                            tier1Text = "ویزه خانم",
+                            tier2Text = "نازیــــه",
+                            tier3Text = "است",
                             entranceSfx = "Cinematic Swoosh",
                             words = listOf(
-                                WordTiming(1.80, 2.05, "بهترین", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
-                                WordTiming(2.05, 2.30, "فرصت", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
-                                WordTiming(2.30, 2.82, "مهاجرت", customColor = "#FF7A00", scaleBoost = 1.32, animation = "Pop", sfx = "Heavy Impact", tier = 2),
-                                WordTiming(2.82, 2.98, "و", customColor = "#FFFFFF", scaleBoost = 1.0, tier = 3),
-                                WordTiming(2.98, 3.18, "کار", customColor = "#FACC15", scaleBoost = 1.15, animation = "Bounce", tier = 3),
-                                WordTiming(3.18, 3.40, "دانشجویی", customColor = "#FFFFFF", scaleBoost = 1.10, animation = "Pop", tier = 3)
+                                WordTiming(3.25, 3.75, "ویزه", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(3.75, 4.25, "خانم", customColor = "#FFFFFF", scaleBoost = 1.05, animation = "Slide", tier = 1),
+                                WordTiming(4.25, 5.55, "نازیــــه", customColor = "#FF7A00", scaleBoost = 1.40, animation = "Pop", sfx = "Heavy Impact", tier = 2),
+                                WordTiming(5.55, 6.30, "است", customColor = "#FFFFFF", scaleBoost = 1.10, animation = "Bounce", tier = 3)
                             )
                         ),
                         CaptionCue(
                             id = "v1_c3",
-                            start = 3.5,
-                            end = 4.9,
-                            text = "همین حالا با کپشن‌فورج ویدیو بسازید",
-                            tier1Text = "همین حالا با",
-                            tier2Text = "کپشن‌فورج",
-                            tier3Text = "ویدیو بسازید",
+                            start = 6.45,
+                            end = 9.30,
+                            text = "بهترین فرصت مهاجرت و کار دانشجویی",
+                            tier1Text = "بهترین فرصت",
+                            tier2Text = "مهاجرت",
+                            tier3Text = "و کار دانشجویی",
                             entranceSfx = "Transition Hit",
                             words = listOf(
-                                WordTiming(3.50, 3.72, "همین", customColor = "#FFFFFF", tier = 1),
-                                WordTiming(3.72, 3.92, "حالا", customColor = "#FFFFFF", tier = 1),
-                                WordTiming(3.92, 4.05, "با", customColor = "#FFFFFF", tier = 1),
-                                WordTiming(4.05, 4.50, "کپشن‌فورج", customColor = "#FF7A00", scaleBoost = 1.35, animation = "Pop", sfx = "Bass Drop", tier = 2),
-                                WordTiming(4.50, 4.70, "ویدیو", customColor = "#FACC15", scaleBoost = 1.12, animation = "Bounce", tier = 3),
-                                WordTiming(4.70, 4.90, "بسازید", customColor = "#FFFFFF", scaleBoost = 1.08, animation = "Glow", tier = 3)
+                                WordTiming(6.45, 6.90, "بهترین", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(6.90, 7.35, "فرصت", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(7.35, 8.35, "مهاجرت", customColor = "#FF7A00", scaleBoost = 1.36, animation = "Pop", sfx = "Bass Drop", tier = 2),
+                                WordTiming(8.35, 8.60, "و", customColor = "#FFFFFF", scaleBoost = 1.0, tier = 3),
+                                WordTiming(8.60, 8.95, "کار", customColor = "#FFB800", scaleBoost = 1.14, animation = "Bounce", tier = 3),
+                                WordTiming(8.95, 9.30, "دانشجویی", customColor = "#FFFFFF", scaleBoost = 1.08, animation = "Pop", tier = 3)
+                            )
+                        ),
+                        CaptionCue(
+                            id = "v1_c4",
+                            start = 9.45,
+                            end = 11.85,
+                            text = "در کامنت فنلاند بنویسید",
+                            tier1Text = "در کامنت",
+                            tier2Text = "فنلاند",
+                            tier3Text = "بنویسید",
+                            entranceSfx = "Fast Whoosh",
+                            words = listOf(
+                                WordTiming(9.45, 9.85, "در", customColor = "#FFFFFF", tier = 1),
+                                WordTiming(9.85, 10.30, "کامنت", customColor = "#FFFFFF", tier = 1),
+                                WordTiming(10.30, 11.20, "فنلاند", customColor = "#FF7A00", scaleBoost = 1.38, animation = "Pop", sfx = "Punchy Pop", tier = 2),
+                                WordTiming(11.20, 11.85, "بنویسید", customColor = "#FFFFFF", scaleBoost = 1.12, animation = "Glow", sfx = "Magical Shimmer", tier = 3)
                             )
                         )
                     )
@@ -1074,103 +1088,154 @@ object SampleProjectsFactory {
                     name = "English Bilingual (EN)",
                     language = "en",
                     color = "#06B6D4",
-                    visible = true,
+                    visible = false,
                     style = SubtitleStyle(
                         preset = "Modern Minimal",
                         font = "Inter",
                         fontWeight = 700,
-                        fontSize = 19.0,
+                        fontSize = 18.0,
                         textColor = "#FFFFFF",
                         bgColor = "#181124",
-                        bgEnabled = true,
-                        bgShape = "Pill",
-                        bgOpacity = 78,
-                        outline = 2.0,
-                        yPos = 0.88,
+                        bgEnabled = false,
+                        bgShape = "None",
+                        bgOpacity = 0,
+                        outline = 2.5,
+                        yPos = 0.91,
                         animation = "Fade",
                         karaoke = false
                     ),
                     captions = listOf(
                         CaptionCue(
                             id = "v1_en1",
-                            start = 0.1,
-                            end = 1.7,
-                            text = "Finland Study Visa • No IELTS Required",
-                            words = SrtParser.buildWordTimings("Finland Study Visa • No IELTS Required", 0.1, 1.7)
+                            start = 0.25,
+                            end = 3.10,
+                            text = "Finland Study Visa • No Language Certificate",
+                            words = SrtParser.buildWordTimings("Finland Study Visa • No Language Certificate", 0.25, 3.10)
                         ),
                         CaptionCue(
                             id = "v1_en2",
-                            start = 1.8,
-                            end = 3.4,
-                            text = "Top opportunity for student work & migration",
-                            words = SrtParser.buildWordTimings("Top opportunity for student work & migration", 1.8, 3.4)
+                            start = 3.25,
+                            end = 6.30,
+                            text = "This is Ms. Nazia's approved visa",
+                            words = SrtParser.buildWordTimings("This is Ms. Nazia's approved visa", 3.25, 6.30)
                         ),
                         CaptionCue(
                             id = "v1_en3",
-                            start = 3.5,
-                            end = 4.9,
-                            text = "Create viral multilingual captions with CaptionForge",
-                            words = SrtParser.buildWordTimings("Create viral multilingual captions with CaptionForge", 3.5, 4.9)
+                            start = 6.45,
+                            end = 9.30,
+                            text = "Best opportunity for migration & student work",
+                            words = SrtParser.buildWordTimings("Best opportunity for migration & student work", 6.45, 9.30)
+                        ),
+                        CaptionCue(
+                            id = "v1_en4",
+                            start = 9.45,
+                            end = 11.85,
+                            text = "Comment FINLAND below right now",
+                            words = SrtParser.buildWordTimings("Comment FINLAND below right now", 9.45, 11.85)
                         )
                     )
                 )
             ),
             overlays = listOf(
                 GraphicOverlay(
-                    id = "ov_v1_hero",
-                    name = "Persian Orange Headline Badge",
-                    type = "persian_orange_headline",
-                    content = "فنلاند ۲۰۲۵",
-                    color = "#FF7A00",
-                    start = 0.1,
-                    end = 2.2,
+                    id = "ov_v1_flare_1",
+                    name = "Optical Purple Lens Flare #1",
+                    type = "light_leak",
+                    content = "✦ OPTICAL FLARE ✦",
+                    color = "#D946EF",
+                    start = 1.10,
+                    end = 2.35,
                     xPos = 0.50,
-                    yPos = 0.22,
-                    scale = 1.08,
-                    animation = "Pop",
-                    glow = 6.5
+                    yPos = 0.72,
+                    opacity = 0.90,
+                    animation = "Fade"
                 ),
                 GraphicOverlay(
-                    id = "ov_v1_flare",
-                    name = "Purple Light Flare Transition",
+                    id = "ov_v1_flare_2",
+                    name = "Optical Purple Lens Flare #2",
                     type = "light_leak",
-                    content = "✦ PURPLE FLARE ✦",
+                    content = "✦ OPTICAL FLARE ✦",
+                    color = "#A855F7",
+                    start = 4.20,
+                    end = 5.65,
+                    xPos = 0.50,
+                    yPos = 0.72,
+                    opacity = 0.92,
+                    animation = "Fade"
+                ),
+                GraphicOverlay(
+                    id = "ov_v1_flare_3",
+                    name = "Optical Purple Lens Flare #3",
+                    type = "light_leak",
+                    content = "✦ OPTICAL FLARE ✦",
                     color = "#D946EF",
-                    start = 1.55,
-                    end = 2.35,
-                    opacity = 0.85,
+                    start = 10.25,
+                    end = 11.45,
+                    xPos = 0.50,
+                    yPos = 0.72,
+                    opacity = 0.88,
                     animation = "Fade"
                 )
             ),
             audioClips = listOf(
                 AudioClip(
-                    id = "aud_v1_pop",
-                    name = "Punchy Pop Hero Hit",
-                    category = "Punchy Pop",
-                    source = "sfx/pop_crisp.wav",
-                    start = 0.62,
-                    duration = 0.35,
-                    volume = 0.92,
+                    id = "aud_v1_whoosh_1",
+                    name = "Fast Whoosh Intro",
+                    category = "Fast Whoosh",
+                    source = "sfx/whoosh_fast_air.wav",
+                    start = 0.25,
+                    duration = 0.42,
+                    volume = 0.90,
                     ducking = true
                 ),
                 AudioClip(
-                    id = "aud_v1_whoosh",
-                    name = "Fast Whoosh Cut",
-                    category = "Fast Whoosh",
+                    id = "aud_v1_pop_1",
+                    name = "Punchy Pop Hero Hit",
+                    category = "Punchy Pop",
+                    source = "sfx/pop_crisp.wav",
+                    start = 1.15,
+                    duration = 0.35,
+                    volume = 0.95,
+                    ducking = true
+                ),
+                AudioClip(
+                    id = "aud_v1_whoosh_2",
+                    name = "Cinematic Whip Cut",
+                    category = "Cinematic Swoosh",
                     source = "sfx/whoosh_cinematic_whip.wav",
-                    start = 1.70,
-                    duration = 0.55,
+                    start = 3.25,
+                    duration = 0.50,
+                    volume = 0.90,
+                    ducking = true
+                ),
+                AudioClip(
+                    id = "aud_v1_impact_2",
+                    name = "Heavy Impact Accent",
+                    category = "Heavy Impact",
+                    source = "sfx/impact_heavy_slam.wav",
+                    start = 4.25,
+                    duration = 0.65,
                     volume = 0.88,
                     ducking = true
                 ),
                 AudioClip(
-                    id = "aud_v1_bass",
-                    name = "808 Sub Bass Accent",
+                    id = "aud_v1_bass_3",
+                    name = "808 Sub Bass Drop",
                     category = "Bass Drop",
                     source = "sfx/bass_808_drop.wav",
-                    start = 3.50,
+                    start = 7.35,
                     duration = 0.85,
-                    volume = 0.80,
+                    volume = 0.85,
+                    ducking = true
+                ),
+                AudioClip(
+                    id = "aud_v1_pop_4",
+                    name = "Final Hero Pop",
+                    category = "Punchy Pop",
+                    source = "sfx/pop_bubble_snap.wav",
+                    start = 10.30,
+                    duration = 0.38,
+                    volume = 0.94,
                     ducking = true
                 )
             ),
@@ -1180,17 +1245,26 @@ object SampleProjectsFactory {
                     label = "Intro Hook",
                     sourceUri = "asset:///sample_video.mp4",
                     startInTimeline = 0.0,
-                    endInTimeline = 1.75,
+                    endInTimeline = 3.20,
                     sourceTrimStart = 0.0,
                     transition = "Purple Flash"
                 ),
                 VideoClipSegment(
                     id = "vc_2",
-                    label = "Main Body",
+                    label = "Visa Reveal",
                     sourceUri = "asset:///sample_video.mp4",
-                    startInTimeline = 1.75,
-                    endInTimeline = 5.0,
-                    sourceTrimStart = 1.75,
+                    startInTimeline = 3.20,
+                    endInTimeline = 6.40,
+                    sourceTrimStart = 3.20,
+                    transition = "Purple Flash"
+                ),
+                VideoClipSegment(
+                    id = "vc_3",
+                    label = "Call To Action",
+                    sourceUri = "asset:///sample_video.mp4",
+                    startInTimeline = 6.40,
+                    endInTimeline = 12.0,
+                    sourceTrimStart = 6.40,
                     transition = "Cut"
                 )
             )

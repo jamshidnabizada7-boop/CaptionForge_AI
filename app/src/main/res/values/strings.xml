@@ -1,6 +1,6 @@
 <resources>
-    <string name="app_name">MagicCap</string>
-    <string name="home_subtitle">Magic Editor • AI Kinetic Captions &amp; VFX Studio</string>
+    <string name="app_name">CaptionForge</string>
+    <string name="home_subtitle">CaptionForge • AI Kinetic Captions &amp; VFX Studio</string>
     <string name="new_project">New Project</string>
     <string name="recent_projects">Recent Projects</string>
     <string name="export_video">Export</string>

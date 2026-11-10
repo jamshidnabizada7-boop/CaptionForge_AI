@@ -137,22 +137,62 @@ fun ToolsTraysComposable(
     }
 
     val selectedWordIndex by viewModel.selectedWordIndex.collectAsStateWithLifecycle()
+    var isDrawerExpanded by remember { mutableStateOf(true) }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .background(Color(0xFF0B0A12))
     ) {
-        Box(
+        // Sleek Drawer Handle Bar so user can collapse/expand the active tool panel at any time
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(trayHeight)
-                .background(Color(0xFF0E0D17))
+                .background(Color(0xFF110F1D))
                 .border(0.5.dp, Color(0xFF232038))
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .clickable { isDrawerExpanded = !isDrawerExpanded }
+                .padding(horizontal = 14.dp, vertical = 4.dp)
+                .testTag("tool_drawer_toggle_btn"),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            when (activeTool) {
-                EditorTool.STYLES -> StylesTray(
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(24.dp)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color(0xFF635BFF))
+                )
+                Text(
+                    text = activeTool.label.uppercase(Locale.US),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFA5B4FC)
+                )
+            }
+            Text(
+                text = if (isDrawerExpanded) "Hide Panel ⌄" else "Show Panel ⌃",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF94A3B8)
+            )
+        }
+
+        if (isDrawerExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(trayHeight)
+                    .background(Color(0xFF0E0D17))
+                    .border(0.5.dp, Color(0xFF232038))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                when (activeTool) {
+                    EditorTool.STYLES -> StylesTray(
                     project = project,
                     style = style,
                     selectedCue = selectedCue,
@@ -253,9 +293,10 @@ fun ToolsTraysComposable(
                     onSelectResolution = { viewModel.updateResolution(it) }
                 )
             }
+            }
         }
 
-        // Bottom Scrollable Magic Editor Navigation Bar (Icon + Label + PRO Badges)
+        // Bottom Scrollable Studio Navigation Bar (Icon + Label + PRO Badges)
         val orderedTools = listOf(
             EditorTool.STYLES,
             EditorTool.FONTS,
@@ -310,7 +351,15 @@ fun ToolsTraysComposable(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { viewModel.selectTool(tool) }
+                        .background(if (isSelected && isDrawerExpanded) Color(0xFF1F1B38) else Color.Transparent)
+                        .clickable {
+                            if (isSelected) {
+                                isDrawerExpanded = !isDrawerExpanded
+                            } else {
+                                viewModel.selectTool(tool)
+                                isDrawerExpanded = true
+                            }
+                        }
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                         .testTag("tool_${tool.name.lowercase()}"),
                     contentAlignment = Alignment.Center

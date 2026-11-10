@@ -397,10 +397,10 @@ class ProjectRepository(private val context: Context) {
 
         val scriptLines: List<String> = when (langCode) {
             "fa", "prs" -> listOf(
-                "اگه تو فنلاند جریمه بشی بر اساس درآمدت حساب میشه",
-                "زیرنویس سینمایی هوشمند با دقت کلمه به کلمه",
-                "طراحی حرفه‌ای فونت‌های فارسی و انیمیشن‌های مدرن",
-                "صداگذاری دقیق روی هر کلمه و خروجی با کیفیت بالا"
+                "ویزای تحصیلی فنلاند بدون مدرک زبان",
+                "ویزه خانم نازیــــه است",
+                "بهترین فرصت مهاجرت و کار دانشجویی",
+                "در کامنت فنلاند بنویسید"
             )
             "ps" -> listOf(
                 "په فنلنډ کې جریمه ستاسو د عاید له مخې ټاکل کیږي",
@@ -418,10 +418,10 @@ class ProjectRepository(private val context: Context) {
                 "دعم كامل للخطوط العربية والفارسية بدقة عالية"
             )
             else -> listOf(
-                "In Finland traffic fines scale directly with your income",
-                "Frame accurate word by word kinetic subtitle styling",
-                "Studio sound effects synchronized to key spoken words",
-                "Export crisp MP4 video with burned in animations"
+                "Visa interview approved for Mrs Nazia today",
+                "Finland student visa admission without language barrier",
+                "With clear planning and choosing the right path forward",
+                "Write Finland in the comments below right now"
             )
         }
 
@@ -437,16 +437,30 @@ class ProjectRepository(private val context: Context) {
                 val tier = when {
                     rawWords.size <= 3 -> wIdx + 1
                     wIdx < 2 -> 1
-                    wIdx == 2 || wIdx == 3 -> 2
+                    wIdx == 2 -> 2
                     else -> 3
                 }
-                w.copy(tier = tier)
+                val isHero = tier == 2
+                w.copy(
+                    tier = tier,
+                    customColor = if (isHero) "#FF7A00" else "#FFFFFF",
+                    scaleBoost = if (isHero) 1.35 else 1.0,
+                    animation = if (isHero) "Pop" else "Slide",
+                    sfx = if (isHero) "Punchy Pop" else "None"
+                )
             }
+            val t1 = tieredWords.filter { it.tier == 1 }.joinToString(" ") { it.text }
+            val t2 = tieredWords.filter { it.tier == 2 }.joinToString(" ") { it.text }
+            val t3 = tieredWords.filter { it.tier == 3 }.joinToString(" ") { it.text }
             CaptionCue(
                 id = "asr_${langCode}_${idx + 1}",
                 start = cueStart,
                 end = max(cueStart + 0.3, cueEnd),
                 text = line,
+                tier1Text = t1,
+                tier2Text = t2,
+                tier3Text = t3,
+                entranceSfx = "Fast Whoosh",
                 words = tieredWords
             )
         }

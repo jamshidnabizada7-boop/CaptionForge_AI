@@ -789,4 +789,69 @@ class SfxPlayerManager(private val context: Context) {
         bos.write(data)
         return bos.toByteArray()
     }
+
+    /**
+     * Synthesizes a continuous mixed SFX WAV stem spanning [project.trim.start .. project.trim.end]
+     * containing all timeline AudioClips, cue entrance SFX, and word-level SFX triggers.
+     */
+    fun renderProjectSfxStemWav(project: com.captionforge.android.model.Project, outFile: File): File {
+        val sr = 22050
+        val trimStart = project.trim.start.coerceAtLeast(0.0)
+        val trimEnd = project.trim.end.coerceAtLeast(trimStart + 0.5)
+        val durationSec = trimEnd - trimStart
+        val totalSamples = (durationSec * sr).toInt().coerceAtLeast(sr / 2)
+        val mixBuffer = FloatArray(totalSamples)
+
+        val masterSfxGain = (project.effects.sfxVolume.coerceIn(0, 100) / 100f)
+        val masterMusicGain = (project.effects.musicVolume.coerceIn(0, 100) / 100f)
+        val mode = project.effects.sfxMode
+
+        fun mixPresetAt(presetQuery: String, timelineTimeSec: Double, clipVolume: Float, maxDurSec: Double = 3.0) {
+            val preset = findPreset(presetQuery) ?: return
+            val relSec = timelineTimeSec - trimStart
+            if (relSec < -1.0 || relSec > durationSec) return
+            val samples = synthesizePresetSamples(preset.id, sr)
+            val maxSamples = minOf(samples.size, (maxDurSec * sr).toInt())
+            val startIdx = (relSec * sr).toInt()
+            for (i in 0 until maxSamples) {
+                val dstIdx = startIdx + i
+                if (dstIdx in 0 until totalSamples) {
+                    mixBuffer[dstIdx] = (mixBuffer[dstIdx] + (samples[i] / 32768f) * clipVolume).coerceIn(-0.98f, 0.98f)
+                }
+            }
+        }
+
+        // 1. Timeline AudioClips
+        project.audioClips.forEach { clip ->
+            val gain = (clip.volume.toFloat() * (if (clip.isMusic) masterMusicGain else masterSfxGain)).coerceIn(0f, 1.2f)
+            mixPresetAt(clip.category.ifBlank { clip.name }, clip.start, gain, clip.duration.coerceAtLeast(0.2))
+        }
+
+        // 2. Cue entrance SFX & word-level SFX
+        project.tracks.filter { it.visible }.forEach { track ->
+            track.captions.forEach { cue ->
+                if (mode.equals("Sentence", ignoreCase = true) || mode.equals("Both", ignoreCase = true)) {
+                    val cueSfx = cue.entranceSfx.takeIf { !it.equals("None", ignoreCase = true) && it.isNotBlank() }
+                        ?: project.effects.sfx.takeIf { !it.equals("None", ignoreCase = true) && it.isNotBlank() }
+                    if (cueSfx != null) {
+                        mixPresetAt(cueSfx, cue.start, masterSfxGain * 0.85f)
+                    }
+                }
+                if (mode.equals("Word", ignoreCase = true) || mode.equals("Both", ignoreCase = true)) {
+                    cue.words.forEach { w ->
+                        if (w.sfx.isNotBlank() && !w.sfx.equals("None", ignoreCase = true)) {
+                            mixPresetAt(w.sfx, w.start, masterSfxGain * 0.92f)
+                        }
+                    }
+                }
+            }
+        }
+
+        val pcmShorts = ShortArray(totalSamples) { idx ->
+            (mixBuffer[idx].coerceIn(-0.98f, 0.98f) * 32767f).toInt().toShort()
+        }
+        outFile.parentFile?.mkdirs()
+        outFile.writeBytes(encodeWavPcm16(pcmShorts, sr))
+        return outFile
+    }
 }

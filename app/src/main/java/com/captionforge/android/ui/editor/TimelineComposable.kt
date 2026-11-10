@@ -83,6 +83,8 @@ fun TimelineComposable(
     selectedWordIndex: Int = 0,
     onSelectWord: ((CaptionCue, Int) -> Unit)? = null,
     onTrimCue: ((CaptionCue, Double, Double) -> Unit)? = null,
+    isTimelineExpanded: Boolean = true,
+    showWordStrip: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var dpPerSecond by remember { mutableFloatStateOf(96f) }
@@ -175,8 +177,13 @@ fun TimelineComposable(
                         }
                     }
 
-                    // 2. Subtitle Tracks (Chunky Rounded Indigo/Purple Pills like Magic Editor)
-                    val indexedTracks = project.tracks.mapIndexed { idx, tr -> idx to tr }.reversed()
+                    // 2. Subtitle Tracks (Chunky Rounded Indigo/Purple Pills)
+                    val allIndexedTracks = project.tracks.mapIndexed { idx, tr -> idx to tr }.reversed()
+                    val indexedTracks = if (isTimelineExpanded) {
+                        allIndexedTracks
+                    } else {
+                        allIndexedTracks.filter { it.first == activeTrackIndex }.ifEmpty { allIndexedTracks.take(1) }
+                    }
                     indexedTracks.forEach { (trackIdx, track) ->
                         val isTrackSelected = trackIdx == activeTrackIndex
                         if (project.tracks.size > 1) {
@@ -460,7 +467,7 @@ fun TimelineComposable(
         }
 
         // 5. Interactive Word-Level Timeline Strip (Priority 3: Word-by-word selection, timing & styling strip)
-        if (activeOrSelectedCue != null) {
+        if (showWordStrip && activeOrSelectedCue != null) {
             val words = remember(activeOrSelectedCue.id, activeOrSelectedCue.text, activeOrSelectedCue.words) {
                 if (activeOrSelectedCue.words.isNotEmpty()) {
                     activeOrSelectedCue.words

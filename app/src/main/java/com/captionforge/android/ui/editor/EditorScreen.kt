@@ -958,7 +958,7 @@ fun EditorScreen(
                 }
             }
 
-            // 3. Chunky Rounded Purple Pill Timeline (Magic Editor Style)
+            // 3. Chunky Rounded Purple Pill Timeline (with Compact/Expanded height control)
             TimelineComposable(
                 project = currentProject,
                 currentTime = currentTime,
@@ -995,9 +995,11 @@ fun EditorScreen(
                 onTrimCue = { cue, newStart, newEnd ->
                     viewModel.updateCue(cue.id, cue.text, newStart, newEnd)
                 },
+                isTimelineExpanded = selectedCue != null,
+                showWordStrip = selectedCue != null || activeTool.name in listOf("SFX", "ANIMATIONS", "TIMING"),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(2.2f)
+                    .height(if (selectedCue != null || activeTool.name in listOf("SFX", "ANIMATIONS", "TIMING")) 108.dp else 74.dp)
             )
 
             // 4. Bottom Tools & Trays Dock

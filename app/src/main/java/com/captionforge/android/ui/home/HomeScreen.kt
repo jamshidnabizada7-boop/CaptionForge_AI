@@ -192,7 +192,7 @@ fun HomeScreen(
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "MagicCap",
+                                text = "CaptionForge",
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Black,
                                 color = Color.White
@@ -213,7 +213,7 @@ fun HomeScreen(
                             }
                         }
                         Text(
-                            text = "CaptionForge • AI Kinetic Video Studio",
+                            text = "AI Kinetic Subtitles & Motion VFX Studio",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium,
                             color = AppColors.TextSecondary

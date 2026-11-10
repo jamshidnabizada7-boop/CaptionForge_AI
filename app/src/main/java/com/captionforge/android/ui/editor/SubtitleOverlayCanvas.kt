@@ -1,6 +1,7 @@
 package com.captionforge.android.ui.editor
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -61,8 +64,8 @@ import com.captionforge.android.model.OverlayKeyframe
 import com.captionforge.android.model.Project
 import com.captionforge.android.model.SubtitleStyle
 import com.captionforge.android.model.Track
-import com.captionforge.android.model.WordTiming
 import com.captionforge.android.ui.theme.AppColors
+import com.captionforge.android.ui.theme.LalezarFontFamily
 import com.captionforge.android.ui.theme.isRtlScript
 import com.captionforge.android.ui.theme.parseHexColor
 import com.captionforge.android.ui.theme.resolveComposeFontWeight
@@ -127,7 +130,7 @@ fun SubtitleOverlayCanvas(
             }
         }
 
-        // 3. Foreground Graphic Overlays & VFX Templates
+        // 3. Foreground Graphic Overlays & VFX Templates (including Optical Purple Lens Flares)
         project.overlays.filter {
             it.visible && !it.isBackground && it.depthLayer > 0 &&
                 currentTime >= it.start && currentTime <= it.end
@@ -194,23 +197,29 @@ private fun ActiveTrackSubtitleItem(
 
     val elapsed = (currentTime - (cue.start - style.early)).coerceAtLeast(0.0)
     val remaining = (cue.end - currentTime).coerceAtLeast(0.0)
-    val enterProgress = (elapsed / 0.22).coerceIn(0.0, 1.0).toFloat()
+    val enterProgress = (elapsed / 0.24).coerceIn(0.0, 1.0).toFloat()
     val exitProgress = (remaining / 0.18).coerceIn(0.0, 1.0).toFloat()
 
     val enterScale = when (style.animation.lowercase()) {
-        "pop" -> 0.72f + 0.28f * sin(enterProgress * (PI.toFloat() / 2f))
-        "bounce" -> 0.80f + 0.20f * enterProgress + 0.07f * sin(enterProgress * PI.toFloat() * 2f)
+        "pop" -> {
+            if (enterProgress < 0.72f) {
+                0.55f + (enterProgress / 0.72f) * 0.55f
+            } else {
+                1.10f - ((enterProgress - 0.72f) / 0.28f) * 0.10f
+            }
+        }
+        "bounce" -> 0.80f + 0.20f * enterProgress + 0.08f * sin(enterProgress * PI.toFloat() * 2f)
         else -> 1f
     }
     val exitScale = when (style.exitAnimation.lowercase()) {
-        "scale down" -> 0.75f + 0.25f * exitProgress
+        "scale down" -> 0.78f + 0.22f * exitProgress
         else -> 1f
     }
     val totalScale = (kfState.scale.toFloat() * enterScale * exitScale).coerceIn(0.4f, 2.6f)
 
     val slideOffsetY = when (style.animation.lowercase()) {
-        "slide up" -> ((1f - enterProgress) * 20f).dp
-        "slide down" -> (-(1f - enterProgress) * 20f).dp
+        "slide up" -> ((1f - enterProgress) * 22f).dp
+        "slide down" -> (-(1f - enterProgress) * 22f).dp
         else -> 0.dp
     } + when (style.exitAnimation.lowercase()) {
         "slide down" -> ((1f - exitProgress) * 18f).dp
@@ -234,9 +243,10 @@ private fun ActiveTrackSubtitleItem(
     val xBias = ((dragAccumX.coerceIn(0.08f, 0.92f) - 0.5f) * 2f)
     val yFraction = dragAccumY.coerceIn(0.08f, 0.92f)
     val density = LocalDensity.current
-    val topPaddingDp = with(density) { (canvasHeightPx * (yFraction * 0.80f)).toDp() }
+    val topPaddingDp = with(density) { (canvasHeightPx * (yFraction * 0.78f)).toDp() }
     val horizontalOffsetDp = with(density) { (canvasWidthPx * xBias * 0.38f).toDp() }
 
+    val hasVisibleBox = style.bgEnabled && !style.bgShape.equals("None", ignoreCase = true) && style.bgOpacity > 5
     val bgShape: Shape = when (style.bgShape.lowercase()) {
         "pill" -> RoundedCornerShape(50)
         "sharp" -> RectangleShape
@@ -244,18 +254,18 @@ private fun ActiveTrackSubtitleItem(
         else -> RoundedCornerShape(14.dp)
     }
 
-    val bgColor = if (style.bgEnabled && !style.bgShape.equals("None", ignoreCase = true)) {
+    val bgColor = if (hasVisibleBox) {
         parseHexColor(style.bgColor, style.bgOpacity)
     } else {
         Color.Transparent
     }
 
-    val scaledFontSize = (style.fontSize * 0.68).coerceIn(13.0, 34.0).sp
+    val scaledFontSize = (style.fontSize * 0.72).coerceIn(14.0, 38.0).sp
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.TopCenter
     ) {
         CompositionLocalProvider(
@@ -269,12 +279,11 @@ private fun ActiveTrackSubtitleItem(
                     .rotate(kfState.rotation.toFloat())
                     .alpha(totalAlpha)
                     .let { mod -> if (effectiveBlur > 0.2f) mod.blur(effectiveBlur.dp) else mod }
-                    .clip(bgShape)
-                    .background(bgColor)
+                    .let { mod -> if (hasVisibleBox) mod.clip(bgShape).background(bgColor) else mod }
                     .border(
-                        width = if (isSelected) 2.dp else if (style.overlay == "Glowing Border") 1.5.dp else 0.dp,
+                        width = if (isSelected) 1.5.dp else if (style.overlay == "Glowing Border") 1.5.dp else 0.dp,
                         color = when {
-                            isSelected -> AppColors.PrimaryPurpleLight
+                            isSelected -> AppColors.PrimaryPurpleLight.copy(alpha = 0.75f)
                             style.overlay == "Glowing Border" -> parseHexColor(style.glowColor)
                             else -> Color.Transparent
                         },
@@ -296,8 +305,8 @@ private fun ActiveTrackSubtitleItem(
                     }
                     .clickable { onClick() }
                     .padding(
-                        horizontal = if (style.bgShape.equals("Banner", ignoreCase = true)) 22.dp else 14.dp,
-                        vertical = 8.dp
+                        horizontal = if (hasVisibleBox) 14.dp else 6.dp,
+                        vertical = if (hasVisibleBox) 8.dp else 2.dp
                     )
             ) {
                 if (style.threeTierLayout) {
@@ -329,7 +338,7 @@ private fun ActiveTrackSubtitleItem(
                             val isPastWord = currentTime > word.end
                             val wordText = applyTextTransform(word.text, style.textTransform)
                             val wordScale = if (isActiveWord) {
-                                (word.scaleBoost.toFloat() * 1.12f).coerceIn(1.0f, 1.65f)
+                                (word.scaleBoost.toFloat() * 1.14f).coerceIn(1.0f, 1.75f)
                             } else {
                                 word.scaleBoost.toFloat().coerceIn(0.8f, 1.4f)
                             }
@@ -337,7 +346,7 @@ private fun ActiveTrackSubtitleItem(
                                 word.customColor != null && (isActiveWord || isPastWord) -> parseHexColor(word.customColor)
                                 isActiveWord -> parseHexColor(style.secondaryColor.ifBlank { "#FACC15" })
                                 isPastWord -> parseHexColor(style.textColor)
-                                else -> parseHexColor(style.textColor).copy(alpha = 0.72f)
+                                else -> parseHexColor(style.textColor).copy(alpha = 0.76f)
                             }
 
                             Box(
@@ -389,10 +398,11 @@ private fun ActiveTrackSubtitleItem(
 
 /**
  * Recreates Reference Video 1's signature 3-Tier Persian Orange Kinetic Typography:
- * - Tier 1 (Top): Clean white supporting kicker (e.g., "ویزای تحصیلی")
- * - Tier 2 (Center Hero): Large extra-bold orange-amber gradient headline (e.g., "فنلاند")
- *   with 3D stacked extrusion, thick dark outline, and warm orange glow
- * - Tier 3 (Bottom): Supporting explanatory line with per-word highlight (e.g., "بدون مدرک زبان")
+ * - Tier 1 (Top): Crisp white supporting line (e.g., "ویزای تحصیلی" / "ویزه خانم")
+ * - Tier 2 (Center Hero): Massive (2.0x) orange-gold gradient Persian display headline
+ *   ("فنلاند" / "نازیــــه") with deep 3D dark extrusion stack, heavy stroke, warm bloom,
+ *   and sweeping Optical Purple Anamorphic Lens Flare
+ * - Tier 3 (Bottom): Crisp white supporting line tucked closely below Tier 2 ("بدون مدرک زبان" / "است")
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -405,108 +415,203 @@ private fun ThreeTierKineticSubtitleContent(
     currentTime: Double
 ) {
     val (tier1, tier2, tier3) = cue.resolveThreeTiers()
-    val tier1Size = (baseFontSize.value * 0.76f).sp
-    val tier2HeroSize = (baseFontSize.value * 1.32f).sp
-    val tier3Size = (baseFontSize.value * 0.84f).sp
+    val tier1Size = (baseFontSize.value * 0.88f).sp
+    val tier2HeroSize = (baseFontSize.value * 1.96f).sp
+    val tier3Size = (baseFontSize.value * 0.92f).sp
+
+    val heroFontFamily = if (style.font.equals("Vazirmatn", ignoreCase = true) || style.font.equals("Lalezar", ignoreCase = true)) {
+        LalezarFontFamily
+    } else {
+        fontFamily
+    }
 
     val relProgress = ((currentTime - cue.start) / cue.duration).coerceIn(0.0, 1.0).toFloat()
-    val heroPulse = 1.0f + 0.06f * sin(relProgress * PI.toFloat())
+    val activeHeroWord = cue.words.firstOrNull { w ->
+        (w.tier == 2 || w.text == tier2) && currentTime >= w.start && currentTime <= w.end
+    }
+    val heroPulse = if (activeHeroWord != null) {
+        val wProg = ((currentTime - activeHeroWord.start) / (activeHeroWord.end - activeHeroWord.start).coerceAtLeast(0.15)).coerceIn(0.0, 1.0).toFloat()
+        1.0f + 0.12f * sin(wProg * PI.toFloat())
+    } else {
+        1.0f + 0.05f * sin(relProgress * PI.toFloat())
+    }
 
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = Modifier.widthIn(max = 330.dp)
-    ) {
-        // Tier 1: Top White Supporting Kicker
-        if (tier1.isNotBlank()) {
-            StyledLayeredText(
-                text = applyTextTransform(tier1, style.textTransform),
-                fontFamily = fontFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = tier1Size,
-                fillColor = parseHexColor(style.tier1Color),
-                style = style.copy(extrusion3D = 1.0, glow = 2.0),
-                useGradient = false
-            )
-        }
-
-        // Tier 2: Hero Orange-Amber Main Word / Phrase
-        if (tier2.isNotBlank()) {
-            Box(
-                modifier = Modifier
-                    .scale(heroPulse)
-                    .padding(vertical = 1.dp)
-            ) {
+    Box(contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy((-6).dp),
+            modifier = Modifier.widthIn(max = 340.dp)
+        ) {
+            // Tier 1: Top White Supporting Line
+            if (tier1.isNotBlank()) {
                 StyledLayeredText(
-                    text = applyTextTransform(tier2, style.textTransform),
+                    text = applyTextTransform(tier1, style.textTransform),
                     fontFamily = fontFamily,
-                    fontWeight = FontWeight.Black,
-                    fontSize = tier2HeroSize,
-                    fillColor = parseHexColor(style.tier2Color),
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = tier1Size,
+                    fillColor = parseHexColor(style.tier1Color),
                     style = style.copy(
-                        textColor = style.tier2Color,
-                        extrusion3D = max(3.0, style.extrusion3D),
-                        outline = max(3.5, style.outline),
-                        glow = max(5.0, style.glow)
+                        extrusion3D = 2.0,
+                        outline = max(3.2, style.outline * 0.85),
+                        glow = 0.0
                     ),
-                    useGradient = true
+                    useGradient = false,
+                    isHeroTier = false
                 )
             }
-        }
 
-        // Tier 3: Bottom Explanatory Phrase (with active word highlight)
-        if (tier3.isNotBlank()) {
-            val tier3Words = cue.words.filter { it.tier == 3 }
-            if (tier3Words.isNotEmpty() && style.karaoke) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.Center,
-                    verticalArrangement = Arrangement.Center
+            // Tier 2: Massive Hero Orange-Gold 3D Headline + Optical Purple Lens Flare
+            if (tier2.isNotBlank()) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.scale(heroPulse)
                 ) {
-                    tier3Words.forEach { w ->
-                        val active = currentTime >= w.start && currentTime <= w.end
-                        val c = when {
-                            active -> parseHexColor(w.customColor ?: style.tier2Color)
-                            w.customColor != null -> parseHexColor(w.customColor)
-                            else -> parseHexColor(style.tier3Color)
-                        }
-                        Box(
+                    StyledLayeredText(
+                        text = applyTextTransform(tier2, style.textTransform),
+                        fontFamily = heroFontFamily,
+                        fontWeight = FontWeight.Black,
+                        fontSize = tier2HeroSize,
+                        fillColor = parseHexColor(style.tier2Color),
+                        style = style.copy(
+                            textColor = style.tier2Color,
+                            extrusion3D = max(5.5, style.extrusion3D),
+                            outline = max(4.5, style.outline),
+                            glow = max(7.0, style.glow)
+                        ),
+                        useGradient = true,
+                        isHeroTier = true
+                    )
+
+                    // Sweeping Optical Purple Anamorphic Lens Flare during hero emphasis
+                    if (relProgress in 0.12f..0.82f) {
+                        val flareEnv = sin(((relProgress - 0.12f) / 0.70f) * PI.toFloat()).coerceIn(0f, 1f)
+                        val sweepBias = (relProgress - 0.47f) * 140f
+                        OpticalPurpleLensFlareCanvas(
+                            intensity = flareEnv * 0.78f,
+                            sweepOffsetX = sweepBias,
                             modifier = Modifier
-                                .padding(horizontal = 2.dp)
-                                .scale(if (active) 1.12f else 1.0f)
-                        ) {
-                            StyledLayeredText(
-                                text = applyTextTransform(w.text, style.textTransform),
-                                fontFamily = fontFamily,
-                                fontWeight = if (active) FontWeight.Black else fontWeight,
-                                fontSize = tier3Size,
-                                fillColor = c,
-                                style = style.copy(extrusion3D = 1.2, glow = if (active) 4.0 else 1.5),
-                                useGradient = active && style.gradient
-                            )
-                        }
+                                .width(240.dp)
+                                .height(46.dp)
+                                .align(Alignment.BottomCenter)
+                        )
                     }
                 }
-            } else {
-                StyledLayeredText(
-                    text = applyTextTransform(tier3, style.textTransform),
-                    fontFamily = fontFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = tier3Size,
-                    fillColor = parseHexColor(style.tier3Color),
-                    style = style.copy(extrusion3D = 1.5, glow = 2.5),
-                    useGradient = false
-                )
+            }
+
+            // Tier 3: Bottom Crisp White Supporting Line (with active word highlight)
+            if (tier3.isNotBlank()) {
+                val tier3Words = cue.words.filter { it.tier == 3 }
+                if (tier3Words.isNotEmpty() && style.karaoke) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        tier3Words.forEach { w ->
+                            val active = currentTime >= w.start && currentTime <= w.end
+                            val c = when {
+                                active -> parseHexColor(w.customColor ?: "#FFB800")
+                                w.customColor != null -> parseHexColor(w.customColor)
+                                else -> parseHexColor(style.tier3Color)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 2.dp)
+                                    .scale(if (active) 1.12f else 1.0f)
+                            ) {
+                                StyledLayeredText(
+                                    text = applyTextTransform(w.text, style.textTransform),
+                                    fontFamily = fontFamily,
+                                    fontWeight = if (active) FontWeight.Black else FontWeight.ExtraBold,
+                                    fontSize = tier3Size,
+                                    fillColor = c,
+                                    style = style.copy(
+                                        extrusion3D = 2.0,
+                                        outline = max(3.2, style.outline * 0.85),
+                                        glow = if (active) 4.0 else 0.0
+                                    ),
+                                    useGradient = active && style.gradient,
+                                    isHeroTier = false
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    StyledLayeredText(
+                        text = applyTextTransform(tier3, style.textTransform),
+                        fontFamily = fontFamily,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = tier3Size,
+                        fillColor = parseHexColor(style.tier3Color),
+                        style = style.copy(
+                            extrusion3D = 2.0,
+                            outline = max(3.2, style.outline * 0.85),
+                            glow = 0.0
+                        ),
+                        useGradient = false,
+                        isHeroTier = false
+                    )
+                }
             }
         }
     }
 }
 
+@Composable
+private fun OpticalPurpleLensFlareCanvas(
+    intensity: Float,
+    sweepOffsetX: Float = 0f,
+    modifier: Modifier = Modifier
+) {
+    val alpha = intensity.coerceIn(0f, 1f)
+    if (alpha <= 0.02f) return
+    Canvas(modifier = modifier) {
+        val cx = size.width * 0.5f + sweepOffsetX
+        val cy = size.height * 0.55f
+        val radius = size.width * 0.48f
+
+        // 1. Purple-magenta radial optical bloom
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFF0ABFC).copy(alpha = alpha * 0.85f),
+                    Color(0xFFD946EF).copy(alpha = alpha * 0.55f),
+                    Color(0xFF7C3AED).copy(alpha = alpha * 0.25f),
+                    Color.Transparent
+                ),
+                center = Offset(cx, cy),
+                radius = radius.coerceAtLeast(10f)
+            ),
+            radius = radius.coerceAtLeast(10f),
+            center = Offset(cx, cy)
+        )
+
+        // 2. Horizontal anamorphic violet-white light streak
+        val streakW = size.width * 0.95f
+        val streakH = 7.dp.toPx()
+        drawOval(
+            brush = Brush.horizontalGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    Color(0xFFE879F9).copy(alpha = alpha * 0.8f),
+                    Color.White.copy(alpha = (alpha * 0.95f).coerceAtMost(1f)),
+                    Color(0xFFE879F9).copy(alpha = alpha * 0.8f),
+                    Color.Transparent
+                ),
+                startX = cx - streakW * 0.5f,
+                endX = cx + streakW * 0.5f
+            ),
+            topLeft = Offset(cx - streakW * 0.5f, cy - streakH * 0.5f),
+            size = Size(streakW, streakH)
+        )
+    }
+}
+
 /**
  * Renders multi-layer studio typography with:
- * 1. 3D Extrusion depth stack (`extrusion3D`)
- * 2. True vector stroke outline (`outline` + `outlineColor`)
- * 3. Drop shadow & neon glow (`shadowDepth`, `shadowBlur`, `glow`, `glowColor`)
- * 4. Multi-stop gradient fill (`textColor` -> `secondaryColor` -> `tertiaryColor`) or solid fill
+ * 1. Soft dark ambient drop shadow for instant legibility over bright footage
+ * 2. 3D Extrusion depth stack (`extrusion3D`)
+ * 3. True vector stroke outline (`outline` + `outlineColor`)
+ * 4. Multi-stop vertical orange-gold gradient fill (`secondaryColor` top -> `textColor` mid -> `tertiaryColor` bottom)
  */
 @Composable
 private fun StyledLayeredText(
@@ -516,7 +621,8 @@ private fun StyledLayeredText(
     fontSize: TextUnit,
     fillColor: Color,
     style: SubtitleStyle,
-    useGradient: Boolean
+    useGradient: Boolean,
+    isHeroTier: Boolean = false
 ) {
     val textAlign = when (style.align.lowercase()) {
         "left" -> TextAlign.Left
@@ -530,32 +636,32 @@ private fun StyledLayeredText(
         parseHexColor(style.shadowColor)
     }
     val shadowBlurPx = if (style.glow > 0.2) {
-        (style.glow * 3.2).toFloat()
+        (style.glow * 3.0).toFloat()
     } else {
-        (style.shadowBlur * 1.6).toFloat()
+        (style.shadowBlur * 1.8).toFloat()
     }
     val shadowOffsetPx = (style.shadowDepth * 1.2).toFloat()
 
     Box(contentAlignment = Alignment.Center) {
-        // Layer 1: 3D Extrusion Stack
-        val depthSteps = style.extrusion3D.roundToInt().coerceIn(0, 6)
+        // Layer 1: 3D Extrusion Stack (deep sculptural dark-brown/black shadow steps)
+        val depthSteps = style.extrusion3D.roundToInt().coerceIn(0, 8)
         for (step in depthSteps downTo 1) {
             Text(
                 text = text,
                 fontFamily = fontFamily,
                 fontWeight = fontWeight,
                 fontSize = fontSize,
-                color = outlineColor.copy(alpha = 0.90f),
+                color = if (isHeroTier && step <= 2) Color(0xFF441404) else outlineColor.copy(alpha = 0.96f),
                 textAlign = textAlign,
                 letterSpacing = style.letterSpacing.sp,
                 lineHeight = (fontSize.value * style.lineSpacing).sp,
                 modifier = Modifier.offset {
-                    IntOffset(step * 2, step * 2)
+                    IntOffset((step * 1.6f).roundToInt(), (step * 2.4f).roundToInt())
                 }
             )
         }
 
-        // Layer 2: Vector Stroke Outline
+        // Layer 2: Crisp Vector Stroke Outline
         if (style.outline > 0.2) {
             Text(
                 text = text,
@@ -567,20 +673,21 @@ private fun StyledLayeredText(
                 letterSpacing = style.letterSpacing.sp,
                 lineHeight = (fontSize.value * style.lineSpacing).sp,
                 style = TextStyle.Default.copy(
-                    drawStyle = Stroke(width = (style.outline * 2.2).toFloat().coerceIn(1.5f, 14f))
+                    drawStyle = Stroke(
+                        width = (style.outline * (if (isHeroTier) 2.6 else 2.1)).toFloat().coerceIn(2f, 16f)
+                    )
                 )
             )
         }
 
-        // Layer 3: Foreground Gradient or Solid Fill + Glow/Shadow
+        // Layer 3: Foreground Vertical Orange-Gold Gradient or Solid Fill + Glow/Shadow
         val fgTextStyle = if (useGradient) {
+            val topCol = if (isHeroTier) parseHexColor(style.secondaryColor) else parseHexColor(style.textColor)
+            val midCol = parseHexColor(style.textColor)
+            val botCol = parseHexColor(style.tertiaryColor)
             TextStyle(
-                brush = Brush.linearGradient(
-                    colors = listOf(
-                        parseHexColor(style.textColor),
-                        parseHexColor(style.secondaryColor),
-                        parseHexColor(style.tertiaryColor)
-                    )
+                brush = Brush.verticalGradient(
+                    colors = listOf(topCol, midCol, botCol)
                 ),
                 shadow = Shadow(
                     color = shadowColor,
@@ -592,9 +699,9 @@ private fun StyledLayeredText(
             TextStyle(
                 color = fillColor,
                 shadow = Shadow(
-                    color = shadowColor,
-                    offset = Offset(shadowOffsetPx, shadowOffsetPx),
-                    blurRadius = shadowBlurPx.coerceAtLeast(1f)
+                    color = Color.Black.copy(alpha = 0.85f),
+                    offset = Offset(2f, 4f),
+                    blurRadius = 8f
                 )
             )
         }
@@ -705,67 +812,81 @@ private fun GraphicOverlayItem(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Surface(
-            modifier = Modifier
-                .offset(x = offsetX, y = offsetY)
-                .scale(pulseScale.coerceIn(0.4f, 2.2f))
-                .rotate(kf.rotation.toFloat())
-                .alpha(kf.opacity.toFloat().coerceIn(0.15f, 1.0f))
-                .pointerInput(overlay.id, canvasWidthPx, canvasHeightPx) {
-                    detectDragGestures(
-                        onDragEnd = {
-                            onDragPosition?.invoke(
-                                overlay.id,
-                                dragX.toDouble().coerceIn(0.08, 0.92),
-                                dragY.toDouble().coerceIn(0.08, 0.92)
-                            )
-                        }
-                    ) { change, dragAmount ->
-                        change.consume()
-                        dragX = (dragX + dragAmount.x / canvasWidthPx).coerceIn(0.08f, 0.92f)
-                        dragY = (dragY + dragAmount.y / canvasHeightPx).coerceIn(0.08f, 0.92f)
-                    }
-                }
-                .clickable { onClick() },
-            shape = RoundedCornerShape(12.dp),
-            color = when (overlay.type) {
-                "light_leak" -> baseColor.copy(alpha = 0.28f)
-                "metallic_banner" -> Color(0xFF1E293B).copy(alpha = 0.92f)
-                "persian_orange_headline" -> Color(0xFF1A1025).copy(alpha = 0.92f)
-                else -> Color.Black.copy(alpha = if (overlay.isBackground) 0.38f else 0.72f)
-            },
-            border = BorderStroke(
-                width = if (isSelected) 2.dp else 1.5.dp,
-                color = if (isSelected) Color.White else baseColor
+        if (overlay.type == "light_leak") {
+            val dur = (overlay.end - overlay.start).coerceAtLeast(0.2)
+            val norm = ((currentTime - overlay.start) / dur).coerceIn(0.0, 1.0).toFloat()
+            val env = sin(norm * PI.toFloat()).coerceIn(0f, 1f)
+            OpticalPurpleLensFlareCanvas(
+                intensity = env * kf.opacity.toFloat(),
+                sweepOffsetX = (norm - 0.5f) * 120f,
+                modifier = Modifier
+                    .offset(x = offsetX, y = offsetY)
+                    .width(260.dp)
+                    .height(64.dp)
+                    .clickable { onClick() }
             )
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(baseColor)
+        } else {
+            Surface(
+                modifier = Modifier
+                    .offset(x = offsetX, y = offsetY)
+                    .scale(pulseScale.coerceIn(0.4f, 2.2f))
+                    .rotate(kf.rotation.toFloat())
+                    .alpha(kf.opacity.toFloat().coerceIn(0.15f, 1.0f))
+                    .pointerInput(overlay.id, canvasWidthPx, canvasHeightPx) {
+                        detectDragGestures(
+                            onDragEnd = {
+                                onDragPosition?.invoke(
+                                    overlay.id,
+                                    dragX.toDouble().coerceIn(0.08, 0.92),
+                                    dragY.toDouble().coerceIn(0.08, 0.92)
+                                )
+                            }
+                        ) { change, dragAmount ->
+                            change.consume()
+                            dragX = (dragX + dragAmount.x / canvasWidthPx).coerceIn(0.08f, 0.92f)
+                            dragY = (dragY + dragAmount.y / canvasHeightPx).coerceIn(0.08f, 0.92f)
+                        }
+                    }
+                    .clickable { onClick() },
+                shape = RoundedCornerShape(12.dp),
+                color = when (overlay.type) {
+                    "metallic_banner" -> Color(0xFF1E293B).copy(alpha = 0.92f)
+                    "persian_orange_headline" -> Color(0xFF1A1025).copy(alpha = 0.92f)
+                    else -> Color.Black.copy(alpha = if (overlay.isBackground) 0.38f else 0.72f)
+                },
+                border = BorderStroke(
+                    width = if (isSelected) 2.dp else 1.5.dp,
+                    color = if (isSelected) Color.White else baseColor
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = overlay.content.ifBlank { overlay.name },
-                    color = if (overlay.type == "persian_orange_headline") baseColor else Color.White,
-                    fontFamily = resolveSubtitleFontFamily(
-                        if (isRtlScript(overlay.content)) "Vazirmatn" else "Cinzel"
-                    ),
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = if (overlay.type == "metallic_banner" || overlay.type == "persian_orange_headline") 17.sp else 13.sp,
-                    style = TextStyle(
-                        shadow = Shadow(
-                            color = baseColor,
-                            offset = Offset(1f, 1f),
-                            blurRadius = (overlay.glow.toFloat() * 2f).coerceAtLeast(4f)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(baseColor)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = overlay.content.ifBlank { overlay.name },
+                        color = if (overlay.type == "persian_orange_headline") baseColor else Color.White,
+                        fontFamily = resolveSubtitleFontFamily(
+                            if (isRtlScript(overlay.content)) "Vazirmatn" else "Cinzel"
+                        ),
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = if (overlay.type == "metallic_banner" || overlay.type == "persian_orange_headline") 17.sp else 13.sp,
+                        style = TextStyle(
+                            shadow = Shadow(
+                                color = baseColor,
+                                offset = Offset(1f, 1f),
+                                blurRadius = (overlay.glow.toFloat() * 2f).coerceAtLeast(4f)
+                            )
                         )
                     )
-                )
+                }
             }
         }
     }

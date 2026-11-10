@@ -1,6 +1,6 @@
 {
-  "name": "MagicCap",
-  "description": "MagicCap (Magic Editor Pro) — AI kinetic captions, 3-tier multi-script RTL typography, 60 studio SFX, and motion VFX video editor for Android.",
+  "name": "CaptionForge",
+  "description": "CaptionForge — AI kinetic captions, 3-tier multi-script RTL typography, 60 studio SFX, and motion VFX video editor for Android.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

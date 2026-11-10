@@ -43,7 +43,7 @@ class CaptionForgeRobolectricTest {
     @Test
     fun `1_verify_main_activity_launches_and_renders_home_screen`() {
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("MagicCap").assertIsDisplayed()
+        composeTestRule.onNodeWithText("CaptionForge").assertIsDisplayed()
         composeTestRule.onNodeWithTag("new_project_button").assertIsDisplayed()
         composeTestRule.onNodeWithTag("demo_video1_card").assertIsDisplayed()
         composeTestRule.onNodeWithTag("demo_video2_card").assertIsDisplayed()
@@ -180,7 +180,7 @@ class CaptionForgeRobolectricTest {
         assertNotNull("SRT file should be generated locally", srtFile)
         assertTrue(srtFile!!.exists())
         val parsedBack = SrtParser.parseSrt(srtFile.readText())
-        assertEquals(3, parsedBack.size)
+        assertEquals(4, parsedBack.size)
     }
 
     @Test
