@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.captionforge.android.audio.SfxPlayerManager
+import com.captionforge.android.audio.SfxSoundPreset
 import com.captionforge.android.data.ProbedVideoInfo
 import com.captionforge.android.data.ProjectRepository
 import com.captionforge.android.export.OnDeviceMp4Renderer
@@ -16,16 +17,20 @@ import com.captionforge.android.model.OverlayKeyframe
 import com.captionforge.android.model.Project
 import com.captionforge.android.model.SampleProjectsFactory
 import com.captionforge.android.model.SrtParser
+import com.captionforge.android.model.StylePresetCatalog
+import com.captionforge.android.model.StylePresetItem
 import com.captionforge.android.model.SubtitleStyle
 import com.captionforge.android.model.Track
 import com.captionforge.android.model.VideoClipSegment
 import com.captionforge.android.model.VideoEffects
 import com.captionforge.android.model.VideoTrim
+import com.captionforge.android.model.WordTiming
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.max
@@ -87,6 +92,9 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
     private val _selectedCueId = MutableStateFlow<String?>(null)
     val selectedCueId: StateFlow<String?> = _selectedCueId.asStateFlow()
 
+    private val _selectedWordIndex = MutableStateFlow(0)
+    val selectedWordIndex: StateFlow<Int> = _selectedWordIndex.asStateFlow()
+
     private val _selectedOverlayId = MutableStateFlow<String?>(null)
     val selectedOverlayId: StateFlow<String?> = _selectedOverlayId.asStateFlow()
 
@@ -124,6 +132,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
     val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
 
     private var lastTriggeredCueId: String? = null
+    private var lastTriggeredWordKey: String? = null
 
     init {
         refreshHome()
@@ -342,24 +351,50 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
 
         if (fromUserSeek) {
             lastTriggeredCueId = null
+            lastTriggeredWordKey = null
             return
         }
 
-        // Check SFX trigger on active caption cue entrance
-        val sfxCat = pr.effects.sfx
-        if (sfxCat != "None" && _isPlaying.value) {
-            val activeTrack = pr.tracks.getOrNull(_activeTrackIndex.value) ?: pr.tracks.firstOrNull()
-            val hitCue = activeTrack?.captions?.firstOrNull { cue ->
-                abs(clamped - cue.start) < 0.06
+        if (!_isPlaying.value) {
+            _sfxPulse.value = false
+            return
+        }
+
+        val activeTrack = pr.tracks.getOrNull(_activeTrackIndex.value) ?: pr.tracks.firstOrNull()
+        val hitCue = activeTrack?.captions?.firstOrNull { cue ->
+            clamped >= cue.start && clamped <= cue.end
+        }
+
+        if (hitCue != null) {
+            // 1. Check word-synchronized SFX first
+            val hitWord = hitCue.words.firstOrNull { w ->
+                abs(clamped - w.start) < 0.06 && w.sfx != "None" && w.sfx.isNotBlank()
             }
-            if (hitCue != null && hitCue.id != lastTriggeredCueId) {
-                lastTriggeredCueId = hitCue.id
-                _sfxPulse.value = true
-                if (!_isMuted.value) {
-                    sfxPlayer.playCategory(sfxCat, pr.effects.sfxVolume)
+            if (hitWord != null) {
+                val wordKey = "${hitCue.id}_${hitWord.start}"
+                if (wordKey != lastTriggeredWordKey) {
+                    lastTriggeredWordKey = wordKey
+                    _sfxPulse.value = true
+                    if (!_isMuted.value) {
+                        sfxPlayer.playPreset(hitWord.sfx, pr.effects.sfxVolume)
+                    }
                 }
-            } else if (hitCue == null) {
-                _sfxPulse.value = false
+            }
+
+            // 2. Check cue entrance SFX or global sentence SFX
+            if (abs(clamped - hitCue.start) < 0.06 && hitCue.id != lastTriggeredCueId) {
+                lastTriggeredCueId = hitCue.id
+                val cueSfx = if (hitCue.entranceSfx != "None" && hitCue.entranceSfx.isNotBlank()) {
+                    hitCue.entranceSfx
+                } else {
+                    pr.effects.sfx
+                }
+                if (cueSfx != "None") {
+                    _sfxPulse.value = true
+                    if (!_isMuted.value) {
+                        sfxPlayer.playPreset(cueSfx, pr.effects.sfxVolume)
+                    }
+                }
             }
         } else {
             _sfxPulse.value = false
@@ -380,6 +415,11 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
 
     fun selectCue(cueId: String?) {
         _selectedCueId.value = cueId
+        _selectedWordIndex.value = 0
+    }
+
+    fun selectWordIndex(index: Int) {
+        _selectedWordIndex.value = index.coerceAtLeast(0)
     }
 
     fun selectOverlay(overlayId: String?) {
@@ -412,36 +452,330 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         commitProjectChange(pr.copy(tracks = updatedTracks))
     }
 
+    /**
+     * Applies a StylePresetItem either to the entire active track OR to only the currently selected cue.
+     */
+    fun applyStylePreset(preset: StylePresetItem, applyToEntireTrack: Boolean = true) {
+        val pr = _activeProject.value ?: return
+        val idx = _activeTrackIndex.value.coerceIn(0, max(0, pr.tracks.lastIndex))
+        if (pr.tracks.isEmpty()) return
+        val currentTrack = pr.tracks[idx]
+        if (currentTrack.locked) {
+            showToast("Track \"${currentTrack.name}\" is locked")
+            return
+        }
+        val selCueId = _selectedCueId.value
+        if (!applyToEntireTrack && selCueId != null) {
+            val updatedCues = currentTrack.captions.map { c ->
+                if (c.id == selCueId) c.copy(customStyle = preset.style) else c
+            }
+            val updatedTracks = pr.tracks.toMutableList().apply {
+                this[idx] = currentTrack.copy(captions = updatedCues)
+            }
+            commitProjectChange(pr.copy(tracks = updatedTracks))
+            showToast("Applied \"${preset.name}\" to selected caption")
+        } else {
+            // Clear per-cue overrides when applying to the entire track so all cues adopt the preset
+            val updatedCues = currentTrack.captions.map { it.copy(customStyle = null) }
+            val updatedTracks = pr.tracks.toMutableList().apply {
+                this[idx] = currentTrack.copy(style = preset.style, captions = updatedCues)
+            }
+            val newEffects = if (preset.defaultSfx != "None") {
+                pr.effects.copy(sfx = preset.defaultSfx)
+            } else pr.effects
+            if (preset.defaultSfx != "None") {
+                sfxPlayer.playPreset(preset.defaultSfx, newEffects.sfxVolume)
+            }
+            commitProjectChange(pr.copy(tracks = updatedTracks, effects = newEffects))
+            showToast("Applied \"${preset.name}\" to track")
+        }
+    }
+
+    fun saveCurrentStyleAsCustomPreset(customName: String) {
+        val pr = _activeProject.value ?: return
+        val clean = customName.trim().ifBlank { "Custom Style ${pr.customStylePresets.size + 1}" }
+        val idx = _activeTrackIndex.value.coerceIn(0, max(0, pr.tracks.lastIndex))
+        val curStyle = pr.tracks.getOrNull(idx)?.style ?: SubtitleStyle()
+        val namedStyle = curStyle.copy(preset = clean)
+        val updatedPresets = (pr.customStylePresets.filterNot { it.preset.equals(clean, ignoreCase = true) } + namedStyle)
+        commitProjectChange(pr.copy(customStylePresets = updatedPresets))
+        showToast("Saved style preset \"$clean\"")
+    }
+
+    fun deleteCustomStylePreset(presetName: String) {
+        val pr = _activeProject.value ?: return
+        val updated = pr.customStylePresets.filterNot { it.preset.equals(presetName, ignoreCase = true) }
+        commitProjectChange(pr.copy(customStylePresets = updated))
+        showToast("Removed preset \"$presetName\"")
+    }
+
+    fun selectFontForActiveTrack(fontName: String, fontWeight: Int? = null) {
+        val pr = _activeProject.value ?: return
+        val idx = _activeTrackIndex.value.coerceIn(0, max(0, pr.tracks.lastIndex))
+        val currentTrack = pr.tracks.getOrNull(idx) ?: return
+        if (currentTrack.locked) {
+            showToast("Track is locked")
+            return
+        }
+        val newStyle = currentTrack.style.copy(
+            font = fontName,
+            fontWeight = fontWeight ?: currentTrack.style.fontWeight
+        )
+        val updatedTracks = pr.tracks.toMutableList().apply {
+            this[idx] = currentTrack.copy(style = newStyle)
+        }
+        val updatedRecents = (listOf(fontName) + pr.recentFonts.filterNot { it.equals(fontName, ignoreCase = true) }).take(8)
+        commitProjectChange(pr.copy(tracks = updatedTracks, recentFonts = updatedRecents))
+    }
+
+    fun toggleFavoriteFont(fontName: String) {
+        val pr = _activeProject.value ?: return
+        val exists = pr.favoriteFonts.any { it.equals(fontName, ignoreCase = true) }
+        val updated = if (exists) {
+            pr.favoriteFonts.filterNot { it.equals(fontName, ignoreCase = true) }
+        } else {
+            pr.favoriteFonts + fontName
+        }
+        commitProjectChange(pr.copy(favoriteFonts = updated))
+    }
+
+    fun toggleFavoriteStylePreset(presetId: String) {
+        val pr = _activeProject.value ?: return
+        val exists = pr.favoriteStylePresets.any { it.equals(presetId, ignoreCase = true) }
+        val updated = if (exists) {
+            pr.favoriteStylePresets.filterNot { it.equals(presetId, ignoreCase = true) }
+        } else {
+            pr.favoriteStylePresets + presetId
+        }
+        commitProjectChange(pr.copy(favoriteStylePresets = updated))
+    }
+
+    fun toggleFavoriteSfx(presetId: String) {
+        val pr = _activeProject.value ?: return
+        val exists = pr.favoriteSfx.contains(presetId)
+        val updated = if (exists) pr.favoriteSfx - presetId else pr.favoriteSfx + presetId
+        commitProjectChange(pr.copy(favoriteSfx = updated))
+    }
+
+    fun updateCuePositionFromCanvas(newX: Double, newY: Double) {
+        val pr = _activeProject.value ?: return
+        val idx = _activeTrackIndex.value.coerceIn(0, max(0, pr.tracks.lastIndex))
+        val currentTrack = pr.tracks.getOrNull(idx) ?: return
+        if (currentTrack.locked) return
+        val rx = (newX * 100.0).roundToInt() / 100.0
+        val ry = (newY * 100.0).roundToInt() / 100.0
+        val newStyle = currentTrack.style.copy(xPos = rx, yPos = ry)
+        val selId = _selectedCueId.value
+        val updatedCaptions = if (selId != null) {
+            currentTrack.captions.map { c ->
+                if (c.id == selId) {
+                    val baseCueStyle = c.customStyle ?: newStyle
+                    c.copy(customStyle = baseCueStyle.copy(xPos = rx, yPos = ry))
+                } else c
+            }
+        } else {
+            currentTrack.captions
+        }
+        val updatedTracks = pr.tracks.toMutableList().apply {
+            this[idx] = currentTrack.copy(style = newStyle, captions = updatedCaptions)
+        }
+        commitProjectChange(pr.copy(tracks = updatedTracks))
+    }
+
+    fun updateOverlayPositionFromCanvas(overlayId: String, newX: Double, newY: Double) {
+        val pr = _activeProject.value ?: return
+        val updated = pr.overlays.map { ov ->
+            if (ov.id == overlayId) {
+                ov.copy(
+                    xPos = (newX * 100.0).roundToInt() / 100.0,
+                    yPos = (newY * 100.0).roundToInt() / 100.0
+                )
+            } else ov
+        }
+        commitProjectChange(pr.copy(overlays = updated))
+    }
+
     fun updateVideoEffects(transform: (VideoEffects) -> VideoEffects) {
         val pr = _activeProject.value ?: return
         val newEffects = transform(pr.effects)
         commitProjectChange(pr.copy(effects = newEffects))
     }
 
-    fun auditionAndSelectSfx(category: String) {
-        updateVideoEffects { it.copy(sfx = category) }
-        if (category != "None") {
+    fun auditionAndSelectSfx(categoryOrPreset: String) {
+        val pr = _activeProject.value ?: return
+        val idx = _activeTrackIndex.value.coerceIn(0, max(0, pr.tracks.lastIndex))
+        val track = pr.tracks.getOrNull(idx)
+        val targetCue = track?.captions?.firstOrNull { it.id == _selectedCueId.value }
+            ?: track?.captions?.firstOrNull { _currentTime.value in it.start..it.end }
+            ?: track?.captions?.firstOrNull()
+
+        if (pr.effects.sfxMode.equals("Word", ignoreCase = true) && targetCue != null && track != null && !track.locked) {
+            val baseWords = if (targetCue.words.isNotEmpty()) {
+                targetCue.words
+            } else {
+                SrtParser.buildWordTimings(targetCue.text, targetCue.start, targetCue.end)
+            }
+            if (baseWords.isNotEmpty()) {
+                val wIdx = _selectedWordIndex.value.coerceIn(0, baseWords.lastIndex)
+                val updatedWords = baseWords.toMutableList().apply {
+                    this[wIdx] = this[wIdx].copy(sfx = categoryOrPreset)
+                }
+                val updatedCue = targetCue.copy(words = updatedWords)
+                val updatedCues = track.captions.map { if (it.id == updatedCue.id) updatedCue else it }
+                val updatedTracks = pr.tracks.toMutableList().apply {
+                    this[idx] = track.copy(captions = updatedCues)
+                }
+                commitProjectChange(pr.copy(tracks = updatedTracks, effects = pr.effects.copy(sfx = categoryOrPreset)))
+                if (categoryOrPreset != "None") {
+                    sfxPlayer.playPreset(categoryOrPreset, pr.effects.sfxVolume)
+                    showToast("Assigned \"$categoryOrPreset\" to word \"${updatedWords[wIdx].text}\"")
+                } else {
+                    showToast("Cleared SFX on word \"${updatedWords[wIdx].text}\"")
+                }
+                return
+            }
+        }
+
+        if (targetCue != null && track != null && !track.locked && _selectedCueId.value != null) {
+            val updatedCue = targetCue.copy(entranceSfx = categoryOrPreset)
+            val updatedCues = track.captions.map { if (it.id == updatedCue.id) updatedCue else it }
+            val updatedTracks = pr.tracks.toMutableList().apply {
+                this[idx] = track.copy(captions = updatedCues)
+            }
+            commitProjectChange(pr.copy(tracks = updatedTracks, effects = pr.effects.copy(sfx = categoryOrPreset)))
+        } else {
+            updateVideoEffects { it.copy(sfx = categoryOrPreset) }
+        }
+        if (categoryOrPreset != "None") {
             val vol = _activeProject.value?.effects?.sfxVolume ?: 65
-            sfxPlayer.playCategory(category, vol)
+            sfxPlayer.playPreset(categoryOrPreset, vol)
         }
     }
 
-    fun addSfxClipAtPlayhead(category: String) {
+    fun updateWordInCue(cueId: String, wordIndex: Int, transform: (WordTiming) -> WordTiming) {
         val pr = _activeProject.value ?: return
-        val cat = if (category == "None") "Pop" else category
+        val idx = _activeTrackIndex.value.coerceIn(0, max(0, pr.tracks.lastIndex))
+        val track = pr.tracks.getOrNull(idx) ?: return
+        if (track.locked) {
+            showToast("Track is locked")
+            return
+        }
+        val cue = track.captions.firstOrNull { it.id == cueId } ?: return
+        val baseWords = if (cue.words.isNotEmpty()) {
+            cue.words
+        } else {
+            SrtParser.buildWordTimings(cue.text, cue.start, cue.end)
+        }
+        if (wordIndex !in baseWords.indices) return
+        val updatedWords = baseWords.toMutableList().apply {
+            this[wordIndex] = transform(this[wordIndex])
+        }
+        val rebuiltText = updatedWords.joinToString(" ") { it.text }.trim().ifBlank { cue.text }
+        val newCueStart = minOf(cue.start, updatedWords.minOf { it.start }).coerceAtLeast(0.0)
+        val newCueEnd = maxOf(cue.end, updatedWords.maxOf { it.end }).coerceAtMost(pr.duration)
+        val updatedCue = cue.copy(
+            text = rebuiltText,
+            start = newCueStart,
+            end = max(newCueStart + 0.1, newCueEnd),
+            words = updatedWords
+        )
+        val updatedCues = track.captions.map { if (it.id == cueId) updatedCue else it }.sortedBy { it.start }
+        val updatedTracks = pr.tracks.toMutableList().apply {
+            this[idx] = track.copy(captions = updatedCues)
+        }
+        commitProjectChange(pr.copy(tracks = updatedTracks))
+    }
+
+    fun addSfxClipAtPlayhead(categoryOrPreset: String) {
+        val pr = _activeProject.value ?: return
+        val preset = sfxPlayer.findPreset(if (categoryOrPreset == "None") "Soft Pop" else categoryOrPreset)
+        if (preset != null) {
+            addSfxPresetClipAtPlayhead(preset)
+            return
+        }
+        val cat = if (categoryOrPreset == "None") "Soft Pop" else categoryOrPreset
         val clip = AudioClip(
             id = "aud_${UUID.randomUUID().toString().take(6)}",
             name = "$cat Hit",
             category = cat,
             source = "sfx/${cat.lowercase().replace(" ", "_")}.wav",
             start = _currentTime.value,
-            duration = 0.8,
+            duration = 0.6,
             volume = 1.0,
             ducking = true
         )
         sfxPlayer.playCategory(cat, pr.effects.sfxVolume)
         commitProjectChange(pr.copy(audioClips = pr.audioClips + clip))
-        showToast("Added $cat audio clip at ${String.format("%.1f", _currentTime.value)}s")
+        showToast("Added $cat audio clip at ${String.format(Locale.US, "%.1f", _currentTime.value)}s")
+    }
+
+    fun addSfxPresetClipAtPlayhead(preset: SfxSoundPreset) {
+        val pr = _activeProject.value ?: return
+        val clip = AudioClip(
+            id = "aud_${UUID.randomUUID().toString().take(6)}",
+            name = preset.name,
+            category = preset.category,
+            source = "sfx/${preset.filename}",
+            start = (_currentTime.value * 100.0).roundToInt() / 100.0,
+            duration = preset.durationSec,
+            volume = if (preset.isMusicLoop) 0.55 else 0.95,
+            fadeIn = if (preset.isMusicLoop) 0.25 else 0.02,
+            fadeOut = if (preset.isMusicLoop) 0.35 else 0.08,
+            ducking = true,
+            loop = preset.isMusicLoop,
+            isMusic = preset.isMusicLoop
+        )
+        sfxPlayer.playPreset(preset.id, pr.effects.sfxVolume)
+        commitProjectChange(pr.copy(audioClips = pr.audioClips + clip))
+        showToast("Added \"${preset.name}\" at ${String.format(Locale.US, "%.1f", _currentTime.value)}s")
+    }
+
+    fun importUserAudioFromUri(uri: Uri) {
+        val pr = _activeProject.value ?: return
+        viewModelScope.launch {
+            val res = repository.importUserAudioFile(uri)
+            res.fold(
+                onSuccess = { (name, file, durSec) ->
+                    val clip = AudioClip(
+                        id = "aud_usr_${UUID.randomUUID().toString().take(6)}",
+                        name = name,
+                        category = "Imported Audio",
+                        source = file.absolutePath,
+                        start = (_currentTime.value * 100.0).roundToInt() / 100.0,
+                        duration = durSec.coerceAtMost(pr.duration),
+                        volume = 0.85,
+                        fadeIn = 0.10,
+                        fadeOut = 0.15,
+                        ducking = true,
+                        isMusic = durSec > 3.0
+                    )
+                    sfxPlayer.playFileOrPreset(file.absolutePath, 80)
+                    commitProjectChange(pr.copy(audioClips = pr.audioClips + clip))
+                    showToast("Imported audio \"$name\" (${String.format(Locale.US, "%.1f", durSec)}s)")
+                },
+                onFailure = {
+                    showToast("Audio import failed: ${it.localizedMessage}")
+                }
+            )
+        }
+    }
+
+    fun updateAudioClip(updatedClip: AudioClip) {
+        val pr = _activeProject.value ?: return
+        val updated = pr.audioClips.map { if (it.id == updatedClip.id) updatedClip else it }
+        commitProjectChange(pr.copy(audioClips = updated))
+    }
+
+    fun duplicateAudioClip(clipId: String) {
+        val pr = _activeProject.value ?: return
+        val orig = pr.audioClips.firstOrNull { it.id == clipId } ?: return
+        val copy = orig.copy(
+            id = "aud_${UUID.randomUUID().toString().take(6)}",
+            name = "${orig.name} (2)",
+            start = (orig.start + orig.duration + 0.1).coerceAtMost(max(0.0, pr.duration - 0.3))
+        )
+        commitProjectChange(pr.copy(audioClips = pr.audioClips + copy))
+        showToast("Duplicated audio clip \"${orig.name}\"")
     }
 
     fun deleteAudioClip(clipId: String) {
@@ -490,9 +824,29 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                     text = newText.trim(),
                     start = validStart,
                     end = validEnd,
-                    words = SrtParser.buildWordTimings(newText.trim(), validStart, validEnd)
+                    words = SrtParser.buildWordTimings(newText.trim(), validStart, validEnd, c.words)
                 )
             } else c
+        }.sortedBy { it.start }
+        val updatedTracks = pr.tracks.toMutableList().apply {
+            this[idx] = track.copy(captions = updatedCues)
+        }
+        commitProjectChange(pr.copy(tracks = updatedTracks))
+    }
+
+    fun updateCueFull(updatedCue: CaptionCue) {
+        val pr = _activeProject.value ?: return
+        val idx = _activeTrackIndex.value.coerceIn(0, max(0, pr.tracks.lastIndex))
+        val track = pr.tracks.getOrNull(idx) ?: return
+        if (track.locked) {
+            showToast("Track is locked")
+            return
+        }
+        val validStart = updatedCue.start.coerceIn(0.0, pr.duration)
+        val validEnd = updatedCue.end.coerceIn(validStart + 0.1, pr.duration)
+        val finalCue = updatedCue.copy(start = validStart, end = validEnd)
+        val updatedCues = track.captions.map { c ->
+            if (c.id == finalCue.id) finalCue else c
         }.sortedBy { it.start }
         val updatedTracks = pr.tracks.toMutableList().apply {
             this[idx] = track.copy(captions = updatedCues)
@@ -538,7 +892,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         }
         commitProjectChange(pr.copy(tracks = updatedTracks))
         _selectedCueId.value = cue1.id
-        showToast("Cue split at ${String.format("%.2f", splitTime)}s")
+        showToast("Cue split at ${String.format(Locale.US, "%.2f", splitTime)}s")
     }
 
     fun mergeSelectedCueWithNext() {
@@ -684,7 +1038,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
             add(targetIdx + 1, clipB)
         }
         commitProjectChange(pr.copy(videoClips = updatedClips))
-        showToast("Video clip split at ${String.format("%.2f", splitPoint)}s")
+        showToast("Video clip split at ${String.format(Locale.US, "%.2f", splitPoint)}s")
     }
 
     fun cycleClipTransition(clipId: String) {
@@ -713,20 +1067,8 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
 
         when (templateId) {
             "v1_orange_headline" -> {
-                newStyle = curTrack.style.copy(
-                    preset = "Orange Headline",
-                    font = "Vazirmatn",
-                    fontSize = 30.0,
-                    textColor = "#FF7A00",
-                    bgColor = "#110D1A",
-                    bgEnabled = true,
-                    outline = 3.5,
-                    animation = "Pop",
-                    yPos = 0.72,
-                    glow = 5.0,
-                    glowColor = "#FF7A00"
-                )
-                newEffects = newEffects.copy(sfx = "Pop", sfxMode = "Sentence", sfxVolume = 65)
+                newStyle = StylePresetCatalog.findByNameOrId("orange_persian_kinetic")!!.style
+                newEffects = newEffects.copy(sfx = "Punchy Pop", sfxMode = "Both", sfxVolume = 65)
                 newOverlays.add(
                     GraphicOverlay(
                         id = ovId,
@@ -737,28 +1079,18 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                         start = nowStart,
                         end = nowEnd,
                         xPos = 0.50,
-                        yPos = 0.28,
+                        yPos = 0.24,
                         scale = 1.05,
                         animation = "Pop"
                     )
                 )
             }
             "v1_orange_white_explainer" -> {
-                newStyle = curTrack.style.copy(
-                    preset = "Orange/White Explainer",
-                    font = "Noto Sans Arabic",
-                    fontSize = 25.0,
-                    textColor = "#FFFFFF",
-                    bgColor = "#1E1B2E",
-                    bgEnabled = true,
-                    outline = 2.0,
-                    animation = "Fade",
-                    yPos = 0.78
-                )
-                newEffects = newEffects.copy(sfx = "Click", sfxMode = "Sentence", sfxVolume = 50)
+                newStyle = StylePresetCatalog.findByNameOrId("white_bold_colored_emphasis")!!.style
+                newEffects = newEffects.copy(sfx = "Text Click", sfxMode = "Sentence", sfxVolume = 55)
             }
             "v1_purple_flare" -> {
-                newEffects = newEffects.copy(sfx = "Whoosh", sfxVolume = 60)
+                newEffects = newEffects.copy(sfx = "Fast Whoosh", sfxVolume = 60)
                 newOverlays.add(
                     GraphicOverlay(
                         id = ovId,
@@ -774,7 +1106,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                 )
             }
             "v2_hand_hologram" -> {
-                newEffects = newEffects.copy(sfx = "Shimmer", sfxVolume = 60)
+                newEffects = newEffects.copy(sfx = "Magical Shimmer", sfxVolume = 60)
                 newOverlays.add(
                     GraphicOverlay(
                         id = ovId,
@@ -793,7 +1125,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                 )
             }
             "v2_soft_bg_words" -> {
-                newEffects = newEffects.copy(sfx = "Ambient", sfxVolume = 45)
+                newEffects = newEffects.copy(sfx = "Atmospheric Ambience", sfxVolume = 45)
                 newOverlays.add(
                     GraphicOverlay(
                         id = ovId,
@@ -835,7 +1167,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                 )
             }
             "v2_metallic_australia" -> {
-                newEffects = newEffects.copy(sfx = "Glitch", sfxVolume = 65)
+                newEffects = newEffects.copy(sfx = "Metallic Impact", sfxVolume = 65)
                 newOverlays.add(
                     GraphicOverlay(
                         id = ovId,
@@ -853,7 +1185,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                 )
             }
             "v2_end_accent" -> {
-                newEffects = newEffects.copy(sfx = "Click", sfxVolume = 45)
+                newEffects = newEffects.copy(sfx = "Logo Reveal", sfxVolume = 55)
                 newOverlays.add(
                     GraphicOverlay(
                         id = ovId,
@@ -875,7 +1207,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         val updatedTracks = pr.tracks.toMutableList().apply {
             this[idx] = curTrack.copy(style = newStyle)
         }
-        sfxPlayer.playCategory(newEffects.sfx, newEffects.sfxVolume)
+        sfxPlayer.playPreset(newEffects.sfx, newEffects.sfxVolume)
         commitProjectChange(
             pr.copy(
                 tracks = updatedTracks,
@@ -955,7 +1287,6 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                     showToast("Applied ${kfs.size} tracked keyframes from backend")
                 },
                 onFailure = {
-                    // Generate smooth procedural motion path keyframes clearly labeled
                     val dur = overlay.duration
                     val fallbackKfs = listOf(
                         OverlayKeyframe(time = 0.0, xPos = 0.42, yPos = 0.44, scale = 0.95, easing = "easeInOut", color = overlay.color),
@@ -974,17 +1305,30 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         val pr = _activeProject.value ?: return
         viewModelScope.launch {
             _busyMessage.value = "Connecting to Faster-Whisper ASR engine..."
-            val res = repository.runBackendTranscription(pr, language, model) { msg ->
-                _busyMessage.value = msg
+            val res = if (_isBackendOnline.value) {
+                repository.runBackendTranscription(pr, language, model) { msg ->
+                    _busyMessage.value = msg
+                }
+            } else {
+                Result.failure(IllegalStateException("Backend offline"))
             }
             _busyMessage.value = null
             res.fold(
                 onSuccess = { refreshed ->
                     commitProjectChange(refreshed)
-                    showToast("AI Transcription complete (${refreshed.tracks.firstOrNull()?.captions?.size ?: 0} cues)")
+                    _activeTrackIndex.value = 0
+                    _selectedCueId.value = refreshed.tracks.firstOrNull()?.captions?.firstOrNull()?.id
+                    _selectedWordIndex.value = 0
+                    showToast("AI Transcription complete via FastAPI (${refreshed.tracks.firstOrNull()?.captions?.size ?: 0} cues)")
                 },
-                onFailure = { err ->
-                    showToast("Backend ASR unavailable (${err.localizedMessage ?: "Offline"}). Configure FastAPI server URL or import SRT.")
+                onFailure = {
+                    val offlineSegmented = repository.buildOfflineSpeechTranscription(pr, language)
+                    commitProjectChange(offlineSegmented)
+                    _activeTrackIndex.value = 0
+                    _selectedCueId.value = offlineSegmented.tracks.firstOrNull()?.captions?.firstOrNull()?.id
+                    _selectedWordIndex.value = 0
+                    val count = offlineSegmented.tracks.firstOrNull()?.captions?.size ?: 0
+                    showToast("Backend offline: Segmented $count ${(language ?: "fa").uppercase()} captions locally with word timings")
                 }
             )
         }
@@ -1000,14 +1344,18 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         }
         viewModelScope.launch {
             _busyMessage.value = "Translating track to ${targetLang.uppercase()}..."
-            val res = repository.runBackendTranslation(
-                project = pr,
-                trackId = curTrack.id,
-                targetLang = targetLang,
-                mode = mode,
-                provider = provider
-            ) { msg ->
-                _busyMessage.value = msg
+            val res = if (_isBackendOnline.value) {
+                repository.runBackendTranslation(
+                    project = pr,
+                    trackId = curTrack.id,
+                    targetLang = targetLang,
+                    mode = mode,
+                    provider = provider
+                ) { msg ->
+                    _busyMessage.value = msg
+                }
+            } else {
+                Result.failure(IllegalStateException("Backend offline"))
             }
             _busyMessage.value = null
             res.fold(
@@ -1017,7 +1365,6 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
                     showToast("Translated to ${targetLang.uppercase()} via FastAPI backend")
                 },
                 onFailure = {
-                    // Use clearly labeled offline translation fallback so bilingual RTL layout is immediately testable
                     val offlineUpdated = repository.buildOfflineFallbackTranslation(pr, curTrack, targetLang, mode)
                     commitProjectChange(offlineUpdated)
                     _activeTrackIndex.value = offlineUpdated.tracks.lastIndex
@@ -1064,7 +1411,8 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
             res.fold(
                 onSuccess = { fontName ->
                     val updatedFonts = (pr.customFonts + fontName).distinct()
-                    commitProjectChange(pr.copy(customFonts = updatedFonts))
+                    val updatedRecents = (listOf(fontName) + pr.recentFonts).distinct().take(8)
+                    commitProjectChange(pr.copy(customFonts = updatedFonts, recentFonts = updatedRecents))
                     updateActiveTrackStyle { it.copy(font = fontName) }
                     showToast("Registered custom font: $fontName")
                 },
@@ -1119,6 +1467,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
             val outDir = File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }
             val srtFile = File(outDir, "${updatedPr.name.replace(Regex("[^a-zA-Z0-9_-]"), "_")}.srt")
             runCatching { srtFile.writeText(srtText, Charsets.UTF_8) }
+            _exportState.value = _exportState.value.copy(exportedSrtFile = srtFile)
 
             if (_isBackendOnline.value) {
                 val backendRes = repository.runBackendExport(

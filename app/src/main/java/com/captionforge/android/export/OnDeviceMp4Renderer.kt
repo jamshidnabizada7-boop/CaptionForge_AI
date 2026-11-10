@@ -4,8 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.net.Uri
 import androidx.annotation.OptIn
@@ -25,29 +27,33 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
-import com.captionforge.android.R
 import com.captionforge.android.model.CaptionCue
 import com.captionforge.android.model.GraphicOverlay
 import com.captionforge.android.model.Project
+import com.captionforge.android.model.SubtitleStyle
 import com.captionforge.android.model.Track
 import com.captionforge.android.ui.theme.CustomFontRegistry
+import com.captionforge.android.ui.theme.resolveBundledFontResId
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * Real On-Device Hardware-Accelerated MP4 Video Renderer powered by Jetpack Media3 Transformer
  * and OverlayEffect (BitmapOverlay).
  *
- * Burns multi-track subtitles (including RTL Persian/Dari, Pashto, Urdu, Arabic, custom fonts,
- * outlines, glow, and karaoke highlights) and graphic VFX overlays onto the trimmed video stream
- * directly on the Android device when the Python FastAPI FFmpeg backend is offline or when
- * On-Device Media3 rendering is selected.
+ * Renders all 26 bundled multi-script fonts (Latin, Persian/Dari, Pashto, Urdu Nastaliq, Arabic),
+ * custom user TTF/OTF fonts, Reference Video 1's 3-Tier Orange Persian Kinetic layout,
+ * 3D extrusion stacks, multi-stop gradients, outlines, glow, and VFX layers directly onto the
+ * trimmed MP4 video stream.
  */
 @OptIn(UnstableApi::class)
 class OnDeviceMp4Renderer(private val context: Context) {
@@ -167,6 +173,22 @@ class OnDeviceMp4Renderer(private val context: Context) {
             if (file.exists()) Uri.fromFile(file) else Uri.parse(source)
         }
     }
+
+    fun renderOverlayFrameBitmap(
+        project: Project,
+        timelineSec: Double,
+        width: Int = 720,
+        height: Int = 1280
+    ): Bitmap {
+        val overlay = CaptionAndVfxBitmapOverlay(
+            context = context,
+            project = project,
+            frameWidth = width,
+            frameHeight = height
+        )
+        val presentationUs = ((timelineSec - project.trim.start).coerceAtLeast(0.0) * 1_000_000.0).roundToInt().toLong()
+        return overlay.getBitmap(presentationUs)
+    }
 }
 
 @OptIn(UnstableApi::class)
@@ -206,15 +228,7 @@ private class CaptionAndVfxBitmapOverlay(
             }
         }
 
-        val resId = when (key) {
-            "vazirmatn" -> R.font.vazirmatn
-            "noto sans arabic", "noto sans" -> R.font.noto_sans_arabic
-            "noto nastaliq urdu" -> R.font.noto_nastaliq_urdu
-            "lalezar" -> R.font.lalezar
-            "amiri" -> R.font.amiri
-            "bebas neue", "impact" -> R.font.bebas_neue
-            else -> R.font.inter
-        }
+        val resId = resolveBundledFontResId(fontName)
         val tf = runCatching { ResourcesCompat.getFont(context, resId) }.getOrNull() ?: Typeface.DEFAULT_BOLD
         typefaceCache[key] = tf
         return tf
@@ -224,13 +238,15 @@ private class CaptionAndVfxBitmapOverlay(
         val timelineSec = project.trim.start + (presentationTimeUs / 1_000_000.0)
         bitmap.eraseColor(Color.TRANSPARENT)
 
-        // 1. Draw visible GraphicOverays active at timelineSec
-        project.overlays.filter { it.visible && timelineSec >= it.start && timelineSec <= it.end }
-            .forEach { ov ->
-                drawGraphicOverlay(canvas, ov, timelineSec)
-            }
+        // 1. Background Overlays
+        project.overlays.filter {
+            it.visible && (it.isBackground || it.depthLayer <= 0) &&
+                timelineSec >= it.start && timelineSec <= it.end
+        }.forEach { ov ->
+            drawGraphicOverlay(canvas, ov)
+        }
 
-        // 2. Draw visible Subtitle Tracks active at timelineSec
+        // 2. Visible Subtitle Tracks
         project.tracks.filter { it.visible }.forEach { track ->
             val earlySec = track.style.early
             val cue = track.captions.firstOrNull { c ->
@@ -241,13 +257,21 @@ private class CaptionAndVfxBitmapOverlay(
             }
         }
 
+        // 3. Foreground Overlays
+        project.overlays.filter {
+            it.visible && !it.isBackground && it.depthLayer > 0 &&
+                timelineSec >= it.start && timelineSec <= it.end
+        }.forEach { ov ->
+            drawGraphicOverlay(canvas, ov)
+        }
+
         return bitmap
     }
 
-    private fun drawGraphicOverlay(canvas: Canvas, ov: GraphicOverlay, timelineSec: Double) {
+    private fun drawGraphicOverlay(canvas: Canvas, ov: GraphicOverlay) {
         val label = ov.content.ifBlank { ov.name }
-        val cx = (ov.xPos.toFloat().coerceIn(0.1f, 0.9f)) * bitmap.width
-        val cy = (ov.yPos.toFloat().coerceIn(0.1f, 0.9f)) * bitmap.height
+        val cx = (ov.xPos.toFloat().coerceIn(0.08f, 0.92f)) * bitmap.width
+        val cy = (ov.yPos.toFloat().coerceIn(0.08f, 0.92f)) * bitmap.height
         val colorInt = parseAndroidColor(ov.color, (ov.opacity * 100).toInt())
 
         fillPaint.reset()
@@ -255,7 +279,7 @@ private class CaptionAndVfxBitmapOverlay(
         fillPaint.typeface = resolveTypeface("Vazirmatn")
         fillPaint.textSize = (bitmap.height * 0.032f * ov.scale.toFloat()).coerceIn(20f, 72f)
         fillPaint.textAlign = Paint.Align.CENTER
-        fillPaint.color = Color.WHITE
+        fillPaint.color = if (ov.type == "persian_orange_headline") colorInt else Color.WHITE
 
         val textWidth = fillPaint.measureText(label)
         val padH = 24f
@@ -267,6 +291,8 @@ private class CaptionAndVfxBitmapOverlay(
             cy + padV
         )
 
+        canvas.save()
+        canvas.rotate(ov.rotation.toFloat(), cx, cy)
         boxPaint.color = Color.argb(190, 16, 12, 28)
         canvas.drawRoundRect(rect, 18f, 18f, boxPaint)
 
@@ -275,63 +301,265 @@ private class CaptionAndVfxBitmapOverlay(
         canvas.drawRoundRect(rect, 18f, 18f, strokePaint)
 
         canvas.drawText(label, cx, cy - 4f, fillPaint)
+        canvas.restore()
     }
 
     private fun drawSubtitleCue(canvas: Canvas, track: Track, cue: CaptionCue, timelineSec: Double) {
-        val style = track.style
+        val style: SubtitleStyle = cue.customStyle ?: track.style
         val tf = resolveTypeface(style.font)
         val scaleFactor = bitmap.height / 720f
-        val pxSize = (style.fontSize.toFloat() * scaleFactor * 1.35f).coerceIn(22f, 88f)
+        val basePxSize = (style.fontSize.toFloat() * scaleFactor * 1.32f * style.scale.toFloat()).coerceIn(20f, 96f)
 
+        val elapsed = (timelineSec - (cue.start - style.early)).coerceAtLeast(0.0)
+        val enterProg = (elapsed / 0.22).coerceIn(0.0, 1.0).toFloat()
+        val animScale = when (style.animation.lowercase()) {
+            "pop" -> 0.75f + 0.25f * sin(enterProg * (PI.toFloat() / 2f))
+            "bounce" -> 0.82f + 0.18f * enterProg
+            else -> 1.0f
+        }
+
+        val cx = (style.xPos.toFloat().coerceIn(0.10f, 0.90f)) * bitmap.width
+        val cy = (style.yPos.toFloat().coerceIn(0.10f, 0.90f)) * bitmap.height
+
+        canvas.save()
+        canvas.translate(cx, cy)
+        canvas.rotate(style.rotation.toFloat())
+        canvas.scale(animScale, animScale)
+
+        if (style.threeTierLayout) {
+            val (t1, t2, t3) = cue.resolveThreeTiers()
+            val tierSpecs = mutableListOf<Triple<String, Float, String>>()
+            if (t1.isNotBlank()) tierSpecs.add(Triple(t1, basePxSize * 0.76f, style.tier1Color))
+            if (t2.isNotBlank()) tierSpecs.add(Triple(t2, basePxSize * 1.30f, style.tier2Color))
+            if (t3.isNotBlank()) tierSpecs.add(Triple(t3, basePxSize * 0.84f, style.tier3Color))
+
+            fillPaint.typeface = Typeface.create(tf, Typeface.BOLD)
+            val totalH = tierSpecs.sumOf { (it.second * 1.25f).toDouble() }.toFloat()
+            val maxW = tierSpecs.maxOfOrNull { (txt, sz, _) ->
+                fillPaint.textSize = sz
+                fillPaint.measureText(txt)
+            } ?: 180f
+
+            if (style.bgEnabled && !style.bgShape.equals("None", ignoreCase = true)) {
+                val padH = 30f * scaleFactor
+                val padV = 18f * scaleFactor
+                val rect = RectF(-maxW / 2f - padH, -totalH / 2f - padV, maxW / 2f + padH, totalH / 2f + padV)
+                boxPaint.color = parseAndroidColor(style.bgColor, min(style.bgOpacity, style.opacity))
+                val radius = if (style.bgShape.equals("Pill", ignoreCase = true)) 60f * scaleFactor else 22f * scaleFactor
+                canvas.drawRoundRect(rect, radius, radius, boxPaint)
+            }
+
+            var curY = -totalH / 2f + (tierSpecs.firstOrNull()?.second ?: basePxSize) * 0.85f
+            tierSpecs.forEachIndexed { idx, (lineText, lineSize, tierColorHex) ->
+                val isHero = (idx == 1 || (tierSpecs.size == 1 && idx == 0))
+                drawStyledLine(
+                    canvas = canvas,
+                    text = transformText(lineText, style.textTransform),
+                    x = 0f,
+                    y = curY,
+                    tf = tf,
+                    pxSize = lineSize,
+                    colorHex = tierColorHex,
+                    style = style,
+                    scaleFactor = scaleFactor,
+                    useGradient = isHero && style.gradient
+                )
+                curY += lineSize * 1.25f
+            }
+        } else {
+            fillPaint.typeface = Typeface.create(tf, Typeface.BOLD)
+            fillPaint.textSize = basePxSize
+            val rawText = if (style.animation.equals("Typewriter", ignoreCase = true)) {
+                val cueDur = (cue.end - cue.start).coerceAtLeast(0.2)
+                val prog = ((timelineSec - cue.start) / (cueDur * 0.7)).coerceIn(0.1, 1.0)
+                val chars = (cue.text.length * prog).roundToInt().coerceAtLeast(1)
+                cue.text.take(chars)
+            } else {
+                cue.text
+            }
+            val lines = rawText.split("\n").map { transformText(it, style.textTransform) }
+            val lineHeight = basePxSize * style.lineSpacing.toFloat().coerceIn(1.0f, 1.8f)
+            val totalHeight = lines.size * lineHeight
+            val maxLineWidth = lines.maxOfOrNull { fillPaint.measureText(it) } ?: 120f
+
+            if (style.bgEnabled && !style.bgShape.equals("None", ignoreCase = true)) {
+                val padH = 28f * scaleFactor
+                val padV = 16f * scaleFactor
+                val bgRect = RectF(
+                    -maxLineWidth / 2f - padH,
+                    -basePxSize - padV,
+                    maxLineWidth / 2f + padH,
+                    (totalHeight - lineHeight) + padV
+                )
+                boxPaint.color = parseAndroidColor(style.bgColor, min(style.bgOpacity, style.opacity))
+                val radius = when (style.bgShape.lowercase()) {
+                    "pill" -> 60f * scaleFactor
+                    "sharp" -> 0f
+                    else -> 20f * scaleFactor
+                }
+                canvas.drawRoundRect(bgRect, radius, radius, boxPaint)
+            }
+
+            val hasPerWordOverrides = cue.words.isNotEmpty() && (
+                style.karaoke || cue.words.any { !it.customColor.isNullOrBlank() || it.scaleBoost != 1.0 || it.animation != "None" }
+            )
+
+            if (hasPerWordOverrides && lines.size == 1) {
+                val spaceW = fillPaint.measureText(" ")
+                val wordWidths = cue.words.map { w ->
+                    val wPx = (basePxSize * w.scaleBoost.toFloat()).coerceIn(18f, 110f)
+                    fillPaint.textSize = wPx
+                    Triple(w, wPx, fillPaint.measureText(transformText(w.text, style.textTransform)))
+                }
+                val totalRowW = wordWidths.sumOf { it.third.toDouble() }.toFloat() + max(0, wordWidths.size - 1) * spaceW
+                var cursorX = -totalRowW / 2f
+                wordWidths.forEach { (w, wPx, wWidth) ->
+                    val wordCenterX = cursorX + wWidth / 2f
+                    val isWordSpokenNow = timelineSec >= w.start && timelineSec <= w.end
+                    val wordColorHex = when {
+                        !w.customColor.isNullOrBlank() -> w.customColor!!
+                        style.karaoke && isWordSpokenNow -> style.secondaryColor
+                        else -> style.textColor
+                    }
+                    if (style.karaoke && isWordSpokenNow) {
+                        val pillRect = RectF(
+                            wordCenterX - wWidth / 2f - 8f * scaleFactor,
+                            -wPx * 0.9f,
+                            wordCenterX + wWidth / 2f + 8f * scaleFactor,
+                            wPx * 0.22f
+                        )
+                        boxPaint.color = parseAndroidColor(style.secondaryColor, 38)
+                        canvas.drawRoundRect(pillRect, 10f * scaleFactor, 10f * scaleFactor, boxPaint)
+                    }
+                    val wordAnimScale = if (isWordSpokenNow && w.animation.lowercase() in listOf("pop", "bounce")) 1.12f else 1.0f
+                    drawStyledLine(
+                        canvas = canvas,
+                        text = transformText(w.text, style.textTransform),
+                        x = wordCenterX,
+                        y = 0f,
+                        tf = tf,
+                        pxSize = wPx * wordAnimScale,
+                        colorHex = wordColorHex,
+                        style = style,
+                        scaleFactor = scaleFactor,
+                        useGradient = style.gradient && isWordSpokenNow
+                    )
+                    cursorX += wWidth + spaceW
+                }
+            } else {
+                lines.forEachIndexed { idx, line ->
+                    val baselineY = idx * lineHeight
+                    drawStyledLine(
+                        canvas = canvas,
+                        text = line,
+                        x = 0f,
+                        y = baselineY,
+                        tf = tf,
+                        pxSize = basePxSize,
+                        colorHex = style.textColor,
+                        style = style,
+                        scaleFactor = scaleFactor,
+                        useGradient = style.gradient
+                    )
+                }
+            }
+        }
+
+        canvas.restore()
+    }
+
+    private fun drawStyledLine(
+        canvas: Canvas,
+        text: String,
+        x: Float,
+        y: Float,
+        tf: Typeface,
+        pxSize: Float,
+        colorHex: String,
+        style: SubtitleStyle,
+        scaleFactor: Float,
+        useGradient: Boolean
+    ) {
+        val boldTf = Typeface.create(tf, Typeface.BOLD)
+        val outlineCol = parseAndroidColor(style.outlineColor, style.opacity)
+
+        // 1. 3D Extrusion Stack
+        val depthSteps = style.extrusion3D.roundToInt().coerceIn(0, 6)
+        if (depthSteps > 0) {
+            fillPaint.reset()
+            fillPaint.isAntiAlias = true
+            fillPaint.typeface = boldTf
+            fillPaint.textSize = pxSize
+            fillPaint.textAlign = Paint.Align.CENTER
+            fillPaint.color = outlineCol
+            for (d in depthSteps downTo 1) {
+                val offset = d * 1.8f * scaleFactor
+                canvas.drawText(text, x + offset, y + offset, fillPaint)
+            }
+        }
+
+        // 2. Stroke Outline
+        if (style.outline > 0.1) {
+            strokePaint.typeface = boldTf
+            strokePaint.textSize = pxSize
+            strokePaint.textAlign = Paint.Align.CENTER
+            strokePaint.strokeWidth = (style.outline.toFloat() * scaleFactor * 1.7f).coerceAtLeast(2f)
+            strokePaint.color = outlineCol
+            canvas.drawText(text, x, y, strokePaint)
+        }
+
+        // 3. Foreground Fill + Glow/Shadow + Optional Gradient
         fillPaint.reset()
         fillPaint.isAntiAlias = true
-        fillPaint.typeface = Typeface.create(tf, Typeface.BOLD)
+        fillPaint.typeface = boldTf
         fillPaint.textSize = pxSize
         fillPaint.textAlign = Paint.Align.CENTER
 
         if (style.glow > 0.1) {
             fillPaint.setShadowLayer(
-                (style.glow.toFloat() * 2.5f).coerceAtMost(20f),
+                (style.glow.toFloat() * 2.6f * scaleFactor).coerceAtMost(24f),
                 0f,
                 0f,
                 parseAndroidColor(style.glowColor, style.opacity)
             )
-        }
-
-        val cx = bitmap.width * 0.5f
-        val cy = (style.yPos.toFloat().coerceIn(0.12f, 0.92f)) * bitmap.height
-
-        val lines = cue.text.split("\n")
-        val lineHeight = pxSize * 1.28f
-        val totalHeight = lines.size * lineHeight
-        val maxLineWidth = lines.maxOfOrNull { fillPaint.measureText(it) } ?: 100f
-
-        if (style.bgEnabled) {
-            val padH = 28f * scaleFactor
-            val padV = 16f * scaleFactor
-            val bgRect = RectF(
-                max(16f, cx - maxLineWidth / 2f - padH),
-                cy - pxSize - padV,
-                min(bitmap.width - 16f, cx + maxLineWidth / 2f + padH),
-                cy + (totalHeight - lineHeight) + padV
+        } else if (style.shadowDepth > 0.1) {
+            val sOffset = (style.shadowDepth.toFloat() * scaleFactor)
+            fillPaint.setShadowLayer(
+                (style.shadowBlur.toFloat() * scaleFactor).coerceAtLeast(1f),
+                sOffset,
+                sOffset,
+                parseAndroidColor(style.shadowColor, style.opacity)
             )
-            boxPaint.color = parseAndroidColor(style.bgColor, min(92, style.opacity))
-            canvas.drawRoundRect(bgRect, 20f * scaleFactor, 20f * scaleFactor, boxPaint)
         }
 
-        val mainColor = parseAndroidColor(style.textColor, style.opacity)
-        lines.forEachIndexed { idx, line ->
-            val baselineY = cy + idx * lineHeight
-            if (style.outline > 0.1) {
-                strokePaint.typeface = fillPaint.typeface
-                strokePaint.textSize = pxSize
-                strokePaint.textAlign = Paint.Align.CENTER
-                strokePaint.strokeWidth = (style.outline.toFloat() * scaleFactor * 1.6f).coerceAtLeast(2f)
-                strokePaint.color = Color.argb((style.opacity * 2.55f).roundToInt().coerceIn(0, 255), 0, 0, 0)
-                canvas.drawText(line, cx, baselineY, strokePaint)
-            }
-            fillPaint.color = mainColor
-            canvas.drawText(line, cx, baselineY, fillPaint)
+        if (useGradient) {
+            fillPaint.shader = LinearGradient(
+                x,
+                y - pxSize,
+                x,
+                y + pxSize * 0.2f,
+                intArrayOf(
+                    parseAndroidColor(colorHex, style.opacity),
+                    parseAndroidColor(style.secondaryColor, style.opacity),
+                    parseAndroidColor(style.tertiaryColor, style.opacity)
+                ),
+                null,
+                Shader.TileMode.CLAMP
+            )
+        } else {
+            fillPaint.shader = null
+            fillPaint.color = parseAndroidColor(colorHex, style.opacity)
+        }
+
+        canvas.drawText(text, x, y, fillPaint)
+        fillPaint.shader = null
+    }
+
+    private fun transformText(text: String, mode: String): String {
+        return when (mode.lowercase()) {
+            "uppercase" -> text.uppercase(Locale.getDefault())
+            "lowercase" -> text.lowercase(Locale.getDefault())
+            else -> text
         }
     }
 

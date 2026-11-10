@@ -10,7 +10,12 @@ import kotlin.math.roundToInt
 data class WordTiming(
     val start: Double = 0.0,
     val end: Double = 0.0,
-    val text: String = ""
+    val text: String = "",
+    val customColor: String? = null,
+    val scaleBoost: Double = 1.0,
+    val animation: String = "None", // None, Pop, Bounce, Glow, Shake, Slide
+    val sfx: String = "None",       // None or any SFX preset/category name
+    val tier: Int = 0               // 0=Auto, 1=Top White Kicker, 2=Hero Orange Main, 3=Bottom Line
 )
 
 @Serializable
@@ -19,23 +24,86 @@ data class CaptionCue(
     val start: Double = 0.0,
     val end: Double = 1.5,
     val text: String = "",
-    val words: List<WordTiming> = emptyList()
+    val words: List<WordTiming> = emptyList(),
+    val tier1Text: String = "",
+    val tier2Text: String = "",
+    val tier3Text: String = "",
+    val customStyle: SubtitleStyle? = null,
+    val entranceSfx: String = "None",
+    val exitSfx: String = "None",
+    val keyframes: List<OverlayKeyframe> = emptyList()
 ) {
     val duration: Double get() = max(0.05, end - start)
+
+    /**
+     * Resolves the 3-tier hierarchical text structure used by Reference Video 1's
+     * Orange Persian Kinetic template (Tier 1: Top white supporting kicker,
+     * Tier 2: Large bold orange-amber hero word/phrase, Tier 3: Bottom white/gold phrase).
+     */
+    fun resolveThreeTiers(): Triple<String, String, String> {
+        if (tier1Text.isNotBlank() || tier2Text.isNotBlank() || tier3Text.isNotBlank()) {
+            val t2 = tier2Text.ifBlank { text }
+            return Triple(tier1Text, t2, tier3Text)
+        }
+        val explicitTiers = words.any { it.tier in 1..3 }
+        if (explicitTiers) {
+            val t1 = words.filter { it.tier == 1 }.joinToString(" ") { it.text }
+            val t2 = words.filter { it.tier == 2 || it.tier == 0 }.joinToString(" ") { it.text }
+            val t3 = words.filter { it.tier == 3 }.joinToString(" ") { it.text }
+            return Triple(t1, t2.ifBlank { text }, t3)
+        }
+        val lines = text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+        if (lines.size >= 3) {
+            return Triple(lines[0], lines[1], lines.drop(2).joinToString(" "))
+        }
+        if (lines.size == 2) {
+            return Triple(lines[0], lines[1], "")
+        }
+        val tokens = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return when {
+            tokens.size >= 5 -> {
+                val t1 = tokens.take(2).joinToString(" ")
+                val t2 = tokens.drop(2).take(max(1, tokens.size - 4)).joinToString(" ")
+                val t3 = tokens.takeLast(2).joinToString(" ")
+                Triple(t1, t2, t3)
+            }
+            tokens.size == 4 -> Triple(
+                tokens.take(1).joinToString(" "),
+                tokens.drop(1).take(2).joinToString(" "),
+                tokens.takeLast(1).joinToString(" ")
+            )
+            tokens.size == 3 -> Triple(tokens[0], tokens[1], tokens[2])
+            tokens.size == 2 -> Triple(tokens[0], tokens[1], "")
+            else -> Triple("", text.trim(), "")
+        }
+    }
 }
 
 @Serializable
 data class SubtitleStyle(
     val preset: String = "Bold",
-    val font: String = "Noto Sans Arabic",
-    val fontSize: Double = 25.0,
+    val font: String = "Vazirmatn",
+    val fontWeight: Int = 700,
+    val fontSize: Double = 26.0,
     val textColor: String = "#FFFFFF",
     val bgColor: String = "#181124",
     val bgEnabled: Boolean = true,
-    val outline: Double = 2.0,
+    val bgShape: String = "Rounded", // Rounded, Pill, Sharp, Banner, Glass, None
+    val bgOpacity: Int = 82,
+    val outline: Double = 2.5,
+    val outlineColor: String = "#000000",
+    val shadowDepth: Double = 3.0,
+    val shadowBlur: Double = 5.0,
+    val shadowColor: String = "#000000",
+    val extrusion3D: Double = 0.0,
+    val xPos: Double = 0.50,
     val yPos: Double = 0.76,
+    val scale: Double = 1.0,
+    val rotation: Double = 0.0,
     val align: String = "center",
+    val textTransform: String = "None", // None, UPPERCASE, lowercase, Title Case
     val animation: String = "Pop",
+    val exitAnimation: String = "Fade", // None, Fade, Scale Down, Slide Down, Blur Out
     val early: Double = 0.0,
     val oneLine: Boolean = false,
     val overlay: String = "None",
@@ -43,12 +111,558 @@ data class SubtitleStyle(
     val followFace: Boolean = false,
     val opacity: Int = 100,
     val letterSpacing: Double = 0.0,
-    val lineSpacing: Double = 1.0,
+    val lineSpacing: Double = 1.08,
+    val blur: Double = 0.0,
     val glow: Double = 0.0,
     val glowColor: String = "#00F0FF",
     val gradient: Boolean = false,
-    val secondaryColor: String = "#FF6A00"
+    val secondaryColor: String = "#FF6A00",
+    val tertiaryColor: String = "#FF2E00",
+    val gradientAngle: Double = 90.0,
+    val threeTierLayout: Boolean = false,
+    val tier1Color: String = "#FFFFFF",
+    val tier2Color: String = "#FF7A00",
+    val tier3Color: String = "#FACC15"
 )
+
+data class StylePresetItem(
+    val id: String,
+    val name: String,
+    val category: String,
+    val badgeText: String,
+    val previewSample: String,
+    val description: String,
+    val style: SubtitleStyle,
+    val defaultSfx: String = "None"
+)
+
+object StylePresetCatalog {
+    val presets: List<StylePresetItem> = listOf(
+        StylePresetItem(
+            id = "orange_persian_kinetic",
+            name = "Cinematic Orange Persian",
+            category = "3-Tier RTL",
+            badgeText = "3-TIER REF #1",
+            previewSample = "ویزای تحصیلی • فنلاند • بدون مدرک زبان",
+            description = "Three-tier Persian kinetic layout: white top kicker, bold orange-amber 3D hero headline with dark outline & warm glow, and gold/white bottom phrase.",
+            defaultSfx = "Punchy Pop",
+            style = SubtitleStyle(
+                preset = "Cinematic Orange Persian",
+                font = "Vazirmatn",
+                fontWeight = 900,
+                fontSize = 31.0,
+                textColor = "#FF7A00",
+                secondaryColor = "#FFB800",
+                tertiaryColor = "#FF3D00",
+                gradient = true,
+                bgColor = "#140D22",
+                bgEnabled = true,
+                bgShape = "Rounded",
+                bgOpacity = 86,
+                outline = 4.0,
+                outlineColor = "#090612",
+                shadowDepth = 5.0,
+                shadowBlur = 8.0,
+                shadowColor = "#000000",
+                extrusion3D = 3.5,
+                xPos = 0.50,
+                yPos = 0.70,
+                animation = "Pop",
+                exitAnimation = "Scale Down",
+                karaoke = true,
+                glow = 6.5,
+                glowColor = "#FF7A00",
+                threeTierLayout = true,
+                tier1Color = "#FFFFFF",
+                tier2Color = "#FF7A00",
+                tier3Color = "#FACC15"
+            )
+        ),
+        StylePresetItem(
+            id = "white_bold_colored_emphasis",
+            name = "White Bold + Colored Emphasis",
+            category = "Creator & Explainer",
+            badgeText = "REF #1 EXPLAINER",
+            previewSample = "بهترین فرصت مهاجرت",
+            description = "Crisp white heavy Persian/Latin captions with vibrant orange/gold active word emphasis and tactile click SFX.",
+            defaultSfx = "Text Click",
+            style = SubtitleStyle(
+                preset = "White Bold + Colored Emphasis",
+                font = "Vazirmatn",
+                fontWeight = 800,
+                fontSize = 27.0,
+                textColor = "#FFFFFF",
+                secondaryColor = "#FF7A00",
+                gradient = false,
+                bgColor = "#161126",
+                bgEnabled = true,
+                bgShape = "Rounded",
+                bgOpacity = 82,
+                outline = 3.0,
+                outlineColor = "#000000",
+                shadowDepth = 3.5,
+                shadowBlur = 5.0,
+                yPos = 0.76,
+                animation = "Pop",
+                exitAnimation = "Fade",
+                karaoke = true,
+                glow = 2.0,
+                glowColor = "#FF7A00",
+                threeTierLayout = false
+            )
+        ),
+        StylePresetItem(
+            id = "bold_documentary",
+            name = "Bold White Documentary",
+            category = "Documentary",
+            badgeText = "DOC STUDIO",
+            previewSample = "THE UNTOLD CHRONICLE",
+            description = "Condensed high-contrast documentary lower-third with warm amber accent bar and deep drop shadow.",
+            defaultSfx = "Deep Whoosh",
+            style = SubtitleStyle(
+                preset = "Bold White Documentary",
+                font = "Oswald",
+                fontWeight = 700,
+                fontSize = 27.0,
+                textColor = "#F8FAFC",
+                secondaryColor = "#F59E0B",
+                bgColor = "#0F172A",
+                bgEnabled = true,
+                bgShape = "Sharp",
+                bgOpacity = 88,
+                outline = 2.5,
+                outlineColor = "#000000",
+                shadowDepth = 4.0,
+                shadowBlur = 6.0,
+                yPos = 0.80,
+                textTransform = "UPPERCASE",
+                animation = "Slide up",
+                exitAnimation = "Fade",
+                karaoke = true
+            )
+        ),
+        StylePresetItem(
+            id = "modern_minimal",
+            name = "Minimal Clean",
+            category = "Minimal Captions",
+            badgeText = "CLEAN",
+            previewSample = "Minimal editorial precision",
+            description = "Refined sans-serif pill badge with soft translucent backdrop and subtle fade transitions.",
+            defaultSfx = "Soft Transition",
+            style = SubtitleStyle(
+                preset = "Minimal Clean",
+                font = "Inter",
+                fontWeight = 600,
+                fontSize = 22.0,
+                textColor = "#F8FAFC",
+                secondaryColor = "#38BDF8",
+                bgColor = "#0F172A",
+                bgEnabled = true,
+                bgShape = "Pill",
+                bgOpacity = 72,
+                outline = 1.0,
+                outlineColor = "#0F172A",
+                shadowDepth = 2.0,
+                shadowBlur = 4.0,
+                yPos = 0.82,
+                animation = "Fade",
+                exitAnimation = "Fade",
+                karaoke = false
+            )
+        ),
+        StylePresetItem(
+            id = "elegant_nastaliq",
+            name = "Elegant Persian/Nastaliq",
+            category = "Urdu & Poetic RTL",
+            badgeText = "NASTALIQ",
+            previewSample = "جدید موشن گرافکس اور اردو",
+            description = "Authentic Urdu & poetic Persian Nastaliq calligraphy with warm gold highlights and generous line height.",
+            defaultSfx = "Magical Shimmer",
+            style = SubtitleStyle(
+                preset = "Elegant Persian/Nastaliq",
+                font = "Noto Nastaliq Urdu",
+                fontWeight = 700,
+                fontSize = 26.0,
+                textColor = "#FEF08A",
+                secondaryColor = "#F59E0B",
+                gradient = true,
+                bgColor = "#1C142B",
+                bgEnabled = true,
+                bgShape = "Rounded",
+                bgOpacity = 80,
+                outline = 2.5,
+                outlineColor = "#090514",
+                shadowDepth = 3.5,
+                shadowBlur = 6.0,
+                lineSpacing = 1.35,
+                yPos = 0.76,
+                animation = "Fade",
+                exitAnimation = "Fade",
+                karaoke = true,
+                glow = 3.0,
+                glowColor = "#F59E0B"
+            )
+        ),
+        StylePresetItem(
+            id = "neon_glow",
+            name = "Neon Glow",
+            category = "Cyber & Hologram",
+            badgeText = "NEON",
+            previewSample = "◈ CYBER PULSE 2026 ◈",
+            description = "Electric cyan and magenta neon bloom matched to Reference Video 2 hologram scenes.",
+            defaultSfx = "Electric Pulse",
+            style = SubtitleStyle(
+                preset = "Neon Glow",
+                font = "Orbitron",
+                fontWeight = 800,
+                fontSize = 26.0,
+                textColor = "#E0F2FE",
+                secondaryColor = "#00F0FF",
+                tertiaryColor = "#D946EF",
+                gradient = true,
+                bgColor = "#090D16",
+                bgEnabled = true,
+                bgShape = "Rounded",
+                bgOpacity = 70,
+                outline = 2.5,
+                outlineColor = "#0284C7",
+                shadowDepth = 0.0,
+                shadowBlur = 12.0,
+                yPos = 0.76,
+                animation = "Bounce",
+                exitAnimation = "Blur Out",
+                karaoke = true,
+                glow = 9.0,
+                glowColor = "#00F0FF"
+            )
+        ),
+        StylePresetItem(
+            id = "karaoke_highlight",
+            name = "Color Highlight Karaoke",
+            category = "Social Media",
+            badgeText = "KARAOKE",
+            previewSample = "Sing & Follow Every Word",
+            description = "Synchronized word-by-word fill sweep with emerald/cyan active badge and bouncy word scaling.",
+            defaultSfx = "Soft Pop",
+            style = SubtitleStyle(
+                preset = "Color Highlight Karaoke",
+                font = "Poppins",
+                fontWeight = 800,
+                fontSize = 27.0,
+                textColor = "#FFFFFF",
+                secondaryColor = "#10B981",
+                bgColor = "#131C31",
+                bgEnabled = true,
+                bgShape = "Pill",
+                bgOpacity = 85,
+                outline = 3.0,
+                outlineColor = "#000000",
+                shadowDepth = 3.0,
+                yPos = 0.75,
+                animation = "Pop",
+                exitAnimation = "Scale Down",
+                karaoke = true,
+                glow = 4.0,
+                glowColor = "#10B981"
+            )
+        ),
+        StylePresetItem(
+            id = "metallic_titles",
+            name = "Metallic Cinematic Title",
+            category = "Reference Video 2 Title",
+            badgeText = "3D METALLIC",
+            previewSample = "AUSTRALIA",
+            description = "Chrome-silver 3D extruded cinematic display title with dark bevel outline and specular sheen.",
+            defaultSfx = "Metallic Impact",
+            style = SubtitleStyle(
+                preset = "Metallic Cinematic Title",
+                font = "Cinzel",
+                fontWeight = 900,
+                fontSize = 34.0,
+                textColor = "#F8FAFC",
+                secondaryColor = "#94A3B8",
+                tertiaryColor = "#E2E8F0",
+                gradient = true,
+                bgColor = "#0F172A",
+                bgEnabled = false,
+                bgShape = "None",
+                outline = 4.0,
+                outlineColor = "#1E293B",
+                shadowDepth = 6.0,
+                shadowBlur = 8.0,
+                extrusion3D = 4.5,
+                letterSpacing = 2.0,
+                yPos = 0.56,
+                textTransform = "UPPERCASE",
+                animation = "Pop",
+                exitAnimation = "Fade",
+                karaoke = false,
+                glow = 5.0,
+                glowColor = "#38BDF8"
+            )
+        ),
+        StylePresetItem(
+            id = "cinematic_film",
+            name = "Cinematic Film",
+            category = "Film & Trailer",
+            badgeText = "ANAMORPHIC",
+            previewSample = "A FILM BY CAPTIONFORGE",
+            description = "Classic widescreen golden-ivory cinema subtitles with crisp black outline and no box clutter.",
+            defaultSfx = "Cinematic Boom",
+            style = SubtitleStyle(
+                preset = "Cinematic Film",
+                font = "Playfair Display",
+                fontWeight = 700,
+                fontSize = 25.0,
+                textColor = "#FEF9C3",
+                secondaryColor = "#FDE047",
+                bgEnabled = false,
+                bgShape = "None",
+                outline = 3.2,
+                outlineColor = "#000000",
+                shadowDepth = 4.0,
+                shadowBlur = 7.0,
+                letterSpacing = 0.6,
+                yPos = 0.84,
+                animation = "Fade",
+                exitAnimation = "Fade",
+                karaoke = false
+            )
+        ),
+        StylePresetItem(
+            id = "youtube_creator",
+            name = "YouTube Creator",
+            category = "Creator & Explainer",
+            badgeText = "CREATOR",
+            previewSample = "WAIT FOR THE PLOT TWIST!",
+            description = "Ultra-bold punchy headline style with heavy black stroke, 3D pop shadow, and high-energy word bounce.",
+            defaultSfx = "Fast Whoosh",
+            style = SubtitleStyle(
+                preset = "YouTube Creator",
+                font = "Anton",
+                fontWeight = 900,
+                fontSize = 30.0,
+                textColor = "#FACC15",
+                secondaryColor = "#FF5500",
+                gradient = true,
+                bgEnabled = false,
+                bgShape = "None",
+                outline = 4.5,
+                outlineColor = "#000000",
+                shadowDepth = 5.0,
+                shadowBlur = 4.0,
+                extrusion3D = 3.0,
+                yPos = 0.74,
+                textTransform = "UPPERCASE",
+                animation = "Bounce",
+                exitAnimation = "Scale Down",
+                karaoke = true,
+                glow = 3.5,
+                glowColor = "#F59E0B"
+            )
+        ),
+        StylePresetItem(
+            id = "social_media_reels",
+            name = "Modern Social Reels",
+            category = "Social Media",
+            badgeText = "9:16 REELS",
+            previewSample = "همین حالا ویدیو بسازید",
+            description = "High-retention vertical Reels/TikTok caption style with purple-pink gradient and crisp word pop.",
+            defaultSfx = "Punchy Pop",
+            style = SubtitleStyle(
+                preset = "Modern Social Reels",
+                font = "Lalezar",
+                fontWeight = 800,
+                fontSize = 29.0,
+                textColor = "#FFFFFF",
+                secondaryColor = "#EC4899",
+                tertiaryColor = "#8B5CF6",
+                gradient = true,
+                bgColor = "#1F1235",
+                bgEnabled = true,
+                bgShape = "Rounded",
+                bgOpacity = 84,
+                outline = 3.5,
+                outlineColor = "#090414",
+                shadowDepth = 4.0,
+                yPos = 0.72,
+                animation = "Pop",
+                exitAnimation = "Scale Down",
+                karaoke = true,
+                glow = 5.0,
+                glowColor = "#EC4899"
+            )
+        ),
+        StylePresetItem(
+            id = "word_by_word_pop",
+            name = "Word-by-Word Pop",
+            category = "Kinetic",
+            badgeText = "WORD POP",
+            previewSample = "ONE POWERFUL WORD",
+            description = "Centers and scales the active spoken word with explosive elastic pop and punchy sound trigger.",
+            defaultSfx = "Punchy Pop",
+            style = SubtitleStyle(
+                preset = "Word-by-Word Pop",
+                font = "Archivo Black",
+                fontWeight = 900,
+                fontSize = 32.0,
+                textColor = "#38BDF8",
+                secondaryColor = "#F43F5E",
+                gradient = true,
+                bgColor = "#0F172A",
+                bgEnabled = true,
+                bgShape = "Pill",
+                bgOpacity = 86,
+                outline = 4.0,
+                outlineColor = "#000000",
+                extrusion3D = 2.5,
+                oneLine = true,
+                yPos = 0.68,
+                animation = "Pop",
+                exitAnimation = "Scale Down",
+                karaoke = true,
+                glow = 6.0,
+                glowColor = "#38BDF8"
+            )
+        ),
+        StylePresetItem(
+            id = "glitch_and_digital",
+            name = "Glitch and Digital",
+            category = "Cyber & Hologram",
+            badgeText = "GLITCH",
+            previewSample = "SYS_OVERRIDE // 0x9F",
+            description = "Monospace digital HUD typography with chromatic neon border and digital byte glitch SFX.",
+            defaultSfx = "Glitch",
+            style = SubtitleStyle(
+                preset = "Glitch and Digital",
+                font = "JetBrains Mono",
+                fontWeight = 700,
+                fontSize = 23.0,
+                textColor = "#22D3EE",
+                secondaryColor = "#F43F5E",
+                gradient = true,
+                bgColor = "#090D16",
+                bgEnabled = true,
+                bgShape = "Sharp",
+                bgOpacity = 90,
+                outline = 2.0,
+                outlineColor = "#F43F5E",
+                shadowDepth = 3.0,
+                shadowColor = "#22D3EE",
+                letterSpacing = 1.2,
+                yPos = 0.78,
+                animation = "Typewriter",
+                exitAnimation = "Blur Out",
+                karaoke = true,
+                glow = 7.0,
+                glowColor = "#22D3EE"
+            )
+        ),
+        StylePresetItem(
+            id = "luxury_editorial",
+            name = "Luxury Editorial",
+            category = "Luxury & Brand",
+            badgeText = "EDITORIAL",
+            previewSample = "Haute Couture & Design",
+            description = "High-fashion serif & Arabic Kufi pairing with champagne gold accents and wide tracking.",
+            defaultSfx = "Light Sweep",
+            style = SubtitleStyle(
+                preset = "Luxury Editorial",
+                font = "Playfair Display",
+                fontWeight = 600,
+                fontSize = 25.0,
+                textColor = "#FEF3C7",
+                secondaryColor = "#D97706",
+                gradient = true,
+                bgColor = "#18131E",
+                bgEnabled = true,
+                bgShape = "Banner",
+                bgOpacity = 76,
+                outline = 1.5,
+                outlineColor = "#271F30",
+                shadowDepth = 3.0,
+                letterSpacing = 1.5,
+                yPos = 0.80,
+                animation = "Fade",
+                exitAnimation = "Fade",
+                karaoke = false,
+                glow = 3.0,
+                glowColor = "#F59E0B"
+            )
+        ),
+        StylePresetItem(
+            id = "typewriter_cinema",
+            name = "Typewriter",
+            category = "Kinetic",
+            badgeText = "TYPEWRITER",
+            previewSample = "تایپ هوشمند زیرنویس_",
+            description = "Crisp mechanical terminal & documentary typewriter reveal with synchronized tactile key clicks.",
+            defaultSfx = "Text Click",
+            style = SubtitleStyle(
+                preset = "Typewriter",
+                font = "JetBrains Mono",
+                fontWeight = 700,
+                fontSize = 24.0,
+                textColor = "#38BDF8",
+                secondaryColor = "#F8FAFC",
+                bgColor = "#0B111E",
+                bgEnabled = true,
+                bgShape = "Sharp",
+                bgOpacity = 88,
+                outline = 2.0,
+                outlineColor = "#0F172A",
+                shadowDepth = 3.0,
+                letterSpacing = 0.8,
+                yPos = 0.78,
+                animation = "Typewriter",
+                exitAnimation = "Fade",
+                karaoke = true
+            )
+        ),
+        StylePresetItem(
+            id = "pop_and_bounce",
+            name = "Pop and Bounce",
+            category = "Kinetic",
+            badgeText = "BOUNCE",
+            previewSample = "انرژی و حرکت سریع!",
+            description = "Elastic spring pop-and-bounce caption energy with solar yellow & coral highlights and punchy pop SFX.",
+            defaultSfx = "Punchy Pop",
+            style = SubtitleStyle(
+                preset = "Pop and Bounce",
+                font = "Archivo Black",
+                fontWeight = 900,
+                fontSize = 29.0,
+                textColor = "#FACC15",
+                secondaryColor = "#F43F5E",
+                tertiaryColor = "#FB923C",
+                gradient = true,
+                bgColor = "#1F122B",
+                bgEnabled = true,
+                bgShape = "Rounded",
+                bgOpacity = 84,
+                outline = 4.0,
+                outlineColor = "#000000",
+                shadowDepth = 4.5,
+                extrusion3D = 2.5,
+                yPos = 0.74,
+                animation = "Bounce",
+                exitAnimation = "Scale Down",
+                karaoke = true,
+                glow = 4.5,
+                glowColor = "#F43F5E"
+            )
+        )
+    )
+
+    fun findByNameOrId(query: String): StylePresetItem? {
+        val clean = query.trim()
+        return presets.firstOrNull {
+            it.id.equals(clean, ignoreCase = true) ||
+                it.name.equals(clean, ignoreCase = true) ||
+                (clean.equals("Orange Persian Kinetic", ignoreCase = true) && it.id == "orange_persian_kinetic")
+        }
+    }
+}
 
 @Serializable
 data class Track(
@@ -125,18 +739,27 @@ data class GraphicOverlay(
 }
 
 @Serializable
+data class AudioVolumeKeyframe(
+    val time: Double = 0.0,
+    val volume: Double = 1.0
+)
+
+@Serializable
 data class AudioClip(
     val id: String = "aud_${UUID.randomUUID().toString().take(8)}",
     val name: String = "Audio Clip",
-    val category: String = "sfx",
+    val category: String = "Soft Pop",
     val source: String = "",
     val start: Double = 0.0,
     val duration: Double = 1.2,
     val trimStart: Double = 0.0,
     val volume: Double = 1.0,
-    val fadeIn: Double = 0.0,
-    val fadeOut: Double = 0.0,
-    val ducking: Boolean = true
+    val fadeIn: Double = 0.05,
+    val fadeOut: Double = 0.10,
+    val ducking: Boolean = true,
+    val loop: Boolean = false,
+    val isMusic: Boolean = false,
+    val keyframes: List<AudioVolumeKeyframe> = emptyList()
 )
 
 @Serializable
@@ -147,8 +770,9 @@ data class VideoEffects(
     val sharpness: Double = 0.0,
     val clearVoice: String = "Off",
     val sfx: String = "None",
-    val sfxMode: String = "Sentence",
-    val sfxVolume: Int = 40
+    val sfxMode: String = "Sentence", // Sentence, Word, Both
+    val sfxVolume: Int = 60,
+    val musicVolume: Int = 35
 )
 
 @Serializable
@@ -169,6 +793,11 @@ data class Project(
     val audioClips: List<AudioClip> = emptyList(),
     val videoClips: List<VideoClipSegment> = emptyList(),
     val customFonts: List<String> = emptyList(),
+    val customStylePresets: List<SubtitleStyle> = emptyList(),
+    val favoriteStylePresets: List<String> = emptyList(),
+    val favoriteFonts: List<String> = emptyList(),
+    val recentFonts: List<String> = emptyList(),
+    val favoriteSfx: List<String> = emptyList(),
     val createdAt: String = "2026-11-09T10:00:00Z",
     val updatedAt: String = "2026-11-09T10:00:00Z",
     val isSyncedWithBackend: Boolean = false
@@ -193,7 +822,7 @@ data class BackendConfig(
     val render: Boolean = false,
     val faceTracking: Boolean = false,
     val sfxCategories: List<String> = emptyList(),
-    val fontsCount: Int = 10
+    val fontsCount: Int = 26
 )
 
 @Serializable
@@ -305,17 +934,28 @@ object SrtParser {
         return result
     }
 
-    fun buildWordTimings(text: String, start: Double, end: Double): List<WordTiming> {
+    fun buildWordTimings(
+        text: String,
+        start: Double,
+        end: Double,
+        existingWords: List<WordTiming> = emptyList()
+    ): List<WordTiming> {
         val tokens = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return emptyList()
         val step = max(0.05, (end - start) / tokens.size)
         return tokens.mapIndexed { index, word ->
             val wStart = start + index * step
             val wEnd = if (index == tokens.lastIndex) end else (wStart + step)
+            val prev = existingWords.getOrNull(index)
             WordTiming(
                 start = (wStart * 100.0).roundToInt() / 100.0,
                 end = (wEnd * 100.0).roundToInt() / 100.0,
-                text = word
+                text = word,
+                customColor = prev?.customColor,
+                scaleBoost = prev?.scaleBoost ?: 1.0,
+                animation = prev?.animation ?: "None",
+                sfx = prev?.sfx ?: "None",
+                tier = prev?.tier ?: 0
             )
         }
     }
@@ -343,6 +983,7 @@ object SrtParser {
 object SampleProjectsFactory {
     fun createVideo1ShowcaseProject(): Project {
         val duration = 5.0
+        val flagshipStyle = StylePresetCatalog.findByNameOrId("orange_persian_kinetic")!!.style
         return Project(
             id = "sample_project_video1",
             name = "Video 1 • Persian Orange Kinetic",
@@ -359,52 +1000,72 @@ object SampleProjectsFactory {
                 contrast = 1.08,
                 saturation = 1.15,
                 clearVoice = "Balanced",
-                sfx = "Pop",
-                sfxMode = "Sentence",
-                sfxVolume = 60
+                sfx = "Punchy Pop",
+                sfxMode = "Both",
+                sfxVolume = 65
             ),
             tracks = listOf(
                 Track(
                     id = "tr_fa_main",
-                    name = "Persian Hero (FA)",
+                    name = "Persian 3-Tier Kinetic (FA)",
                     language = "fa",
-                    color = "#8B5CF6",
+                    color = "#FF7A00",
                     visible = true,
-                    style = SubtitleStyle(
-                        preset = "Orange Headline",
-                        font = "Vazirmatn",
-                        fontSize = 28.0,
-                        textColor = "#FF7A00",
-                        bgColor = "#140E24",
-                        bgEnabled = true,
-                        outline = 3.0,
-                        yPos = 0.72,
-                        animation = "Pop",
-                        karaoke = true,
-                        glow = 4.0,
-                        glowColor = "#FF7A00"
-                    ),
+                    style = flagshipStyle,
                     captions = listOf(
                         CaptionCue(
                             id = "v1_c1",
                             start = 0.1,
                             end = 1.7,
                             text = "ویزای تحصیلی فنلاند بدون مدرک زبان",
-                            words = SrtParser.buildWordTimings("ویزای تحصیلی فنلاند بدون مدرک زبان", 0.1, 1.7)
+                            tier1Text = "ویزای تحصیلی",
+                            tier2Text = "فنلاند",
+                            tier3Text = "بدون مدرک زبان",
+                            entranceSfx = "Fast Whoosh",
+                            words = listOf(
+                                WordTiming(0.10, 0.35, "ویزای", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(0.35, 0.62, "تحصیلی", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(0.62, 1.12, "فنلاند", customColor = "#FF7A00", scaleBoost = 1.35, animation = "Pop", sfx = "Punchy Pop", tier = 2),
+                                WordTiming(1.12, 1.40, "بدون", customColor = "#FACC15", scaleBoost = 1.10, animation = "Bounce", tier = 3),
+                                WordTiming(1.40, 1.55, "مدرک", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Pop", tier = 3),
+                                WordTiming(1.55, 1.70, "زبان", customColor = "#FF7A00", scaleBoost = 1.20, animation = "Glow", sfx = "Text Click", tier = 3)
+                            )
                         ),
                         CaptionCue(
                             id = "v1_c2",
                             start = 1.8,
                             end = 3.4,
                             text = "بهترین فرصت مهاجرت و کار دانشجویی",
-                            words = SrtParser.buildWordTimings("بهترین فرصت مهاجرت و کار دانشجویی", 1.8, 3.4)
+                            tier1Text = "بهترین فرصت",
+                            tier2Text = "مهاجرت",
+                            tier3Text = "و کار دانشجویی",
+                            entranceSfx = "Cinematic Swoosh",
+                            words = listOf(
+                                WordTiming(1.80, 2.05, "بهترین", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(2.05, 2.30, "فرصت", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
+                                WordTiming(2.30, 2.82, "مهاجرت", customColor = "#FF7A00", scaleBoost = 1.32, animation = "Pop", sfx = "Heavy Impact", tier = 2),
+                                WordTiming(2.82, 2.98, "و", customColor = "#FFFFFF", scaleBoost = 1.0, tier = 3),
+                                WordTiming(2.98, 3.18, "کار", customColor = "#FACC15", scaleBoost = 1.15, animation = "Bounce", tier = 3),
+                                WordTiming(3.18, 3.40, "دانشجویی", customColor = "#FFFFFF", scaleBoost = 1.10, animation = "Pop", tier = 3)
+                            )
                         ),
                         CaptionCue(
                             id = "v1_c3",
                             start = 3.5,
                             end = 4.9,
                             text = "همین حالا با کپشن‌فورج ویدیو بسازید",
-                            words = SrtParser.buildWordTimings("همین حالا با کپشن‌فورج ویدیو بسازید", 3.5, 4.9)
+                            tier1Text = "همین حالا با",
+                            tier2Text = "کپشن‌فورج",
+                            tier3Text = "ویدیو بسازید",
+                            entranceSfx = "Transition Hit",
+                            words = listOf(
+                                WordTiming(3.50, 3.72, "همین", customColor = "#FFFFFF", tier = 1),
+                                WordTiming(3.72, 3.92, "حالا", customColor = "#FFFFFF", tier = 1),
+                                WordTiming(3.92, 4.05, "با", customColor = "#FFFFFF", tier = 1),
+                                WordTiming(4.05, 4.50, "کپشن‌فورج", customColor = "#FF7A00", scaleBoost = 1.35, animation = "Pop", sfx = "Bass Drop", tier = 2),
+                                WordTiming(4.50, 4.70, "ویدیو", customColor = "#FACC15", scaleBoost = 1.12, animation = "Bounce", tier = 3),
+                                WordTiming(4.70, 4.90, "بسازید", customColor = "#FFFFFF", scaleBoost = 1.08, animation = "Glow", tier = 3)
+                            )
                         )
                     )
                 ),
@@ -415,14 +1076,17 @@ object SampleProjectsFactory {
                     color = "#06B6D4",
                     visible = true,
                     style = SubtitleStyle(
-                        preset = "Bold",
+                        preset = "Modern Minimal",
                         font = "Inter",
-                        fontSize = 20.0,
+                        fontWeight = 700,
+                        fontSize = 19.0,
                         textColor = "#FFFFFF",
                         bgColor = "#181124",
                         bgEnabled = true,
+                        bgShape = "Pill",
+                        bgOpacity = 78,
                         outline = 2.0,
-                        yPos = 0.84,
+                        yPos = 0.88,
                         animation = "Fade",
                         karaoke = false
                     ),
@@ -431,22 +1095,22 @@ object SampleProjectsFactory {
                             id = "v1_en1",
                             start = 0.1,
                             end = 1.7,
-                            text = "Finland Study Visa Options Explained",
-                            words = SrtParser.buildWordTimings("Finland Study Visa Options Explained", 0.1, 1.7)
+                            text = "Finland Study Visa • No IELTS Required",
+                            words = SrtParser.buildWordTimings("Finland Study Visa • No IELTS Required", 0.1, 1.7)
                         ),
                         CaptionCue(
                             id = "v1_en2",
                             start = 1.8,
                             end = 3.4,
-                            text = "Top opportunity for international students",
-                            words = SrtParser.buildWordTimings("Top opportunity for international students", 1.8, 3.4)
+                            text = "Top opportunity for student work & migration",
+                            words = SrtParser.buildWordTimings("Top opportunity for student work & migration", 1.8, 3.4)
                         ),
                         CaptionCue(
                             id = "v1_en3",
                             start = 3.5,
                             end = 4.9,
-                            text = "Create viral multilingual captions today",
-                            words = SrtParser.buildWordTimings("Create viral multilingual captions today", 3.5, 4.9)
+                            text = "Create viral multilingual captions with CaptionForge",
+                            words = SrtParser.buildWordTimings("Create viral multilingual captions with CaptionForge", 3.5, 4.9)
                         )
                     )
                 )
@@ -454,49 +1118,59 @@ object SampleProjectsFactory {
             overlays = listOf(
                 GraphicOverlay(
                     id = "ov_v1_hero",
-                    name = "Persian Orange Headline",
+                    name = "Persian Orange Headline Badge",
                     type = "persian_orange_headline",
-                    content = "فنلاند",
+                    content = "فنلاند ۲۰۲۵",
                     color = "#FF7A00",
                     start = 0.1,
                     end = 2.2,
                     xPos = 0.50,
-                    yPos = 0.28,
-                    scale = 1.05,
+                    yPos = 0.22,
+                    scale = 1.08,
                     animation = "Pop",
-                    glow = 6.0
+                    glow = 6.5
                 ),
                 GraphicOverlay(
                     id = "ov_v1_flare",
-                    name = "Purple Light Flare",
+                    name = "Purple Light Flare Transition",
                     type = "light_leak",
                     content = "✦ PURPLE FLARE ✦",
                     color = "#D946EF",
-                    start = 1.5,
-                    end = 2.5,
-                    opacity = 0.80,
+                    start = 1.55,
+                    end = 2.35,
+                    opacity = 0.85,
                     animation = "Fade"
                 )
             ),
             audioClips = listOf(
                 AudioClip(
                     id = "aud_v1_pop",
-                    name = "Crisp Caption Pop",
-                    category = "Pop",
+                    name = "Punchy Pop Hero Hit",
+                    category = "Punchy Pop",
                     source = "sfx/pop_crisp.wav",
-                    start = 0.1,
-                    duration = 0.4,
-                    volume = 0.9,
+                    start = 0.62,
+                    duration = 0.35,
+                    volume = 0.92,
                     ducking = true
                 ),
                 AudioClip(
                     id = "aud_v1_whoosh",
-                    name = "Cinematic Whip Transition",
-                    category = "Whoosh",
+                    name = "Fast Whoosh Cut",
+                    category = "Fast Whoosh",
                     source = "sfx/whoosh_cinematic_whip.wav",
-                    start = 1.7,
-                    duration = 0.6,
-                    volume = 0.85,
+                    start = 1.70,
+                    duration = 0.55,
+                    volume = 0.88,
+                    ducking = true
+                ),
+                AudioClip(
+                    id = "aud_v1_bass",
+                    name = "808 Sub Bass Accent",
+                    category = "Bass Drop",
+                    source = "sfx/bass_808_drop.wav",
+                    start = 3.50,
+                    duration = 0.85,
+                    volume = 0.80,
                     ducking = true
                 )
             ),
@@ -525,6 +1199,11 @@ object SampleProjectsFactory {
 
     fun createVideo2VfxShowcaseProject(): Project {
         val duration = 5.0
+        val neonPreset = StylePresetCatalog.findByNameOrId("neon_glow")!!.style.copy(
+            font = "Noto Sans Arabic",
+            fontSize = 25.0,
+            yPos = 0.78
+        )
         return Project(
             id = "sample_project_video2",
             name = "Video 2 • Hologram, Flag & Australia",
@@ -541,9 +1220,9 @@ object SampleProjectsFactory {
                 contrast = 1.12,
                 saturation = 1.2,
                 clearVoice = "Strong",
-                sfx = "Shimmer",
-                sfxMode = "Sentence",
-                sfxVolume = 55
+                sfx = "Magical Shimmer",
+                sfxMode = "Both",
+                sfxVolume = 60
             ),
             tracks = listOf(
                 Track(
@@ -552,33 +1231,28 @@ object SampleProjectsFactory {
                     language = "fa",
                     color = "#8B5CF6",
                     visible = true,
-                    style = SubtitleStyle(
-                        preset = "Neon",
-                        font = "Noto Sans Arabic",
-                        fontSize = 25.0,
-                        textColor = "#FFFFFF",
-                        bgColor = "#1E1B4B",
-                        bgEnabled = true,
-                        outline = 2.5,
-                        yPos = 0.78,
-                        animation = "Bounce",
-                        karaoke = true,
-                        glow = 5.0,
-                        glowColor = "#06B6D4"
-                    ),
+                    style = neonPreset,
                     captions = listOf(
                         CaptionCue(
                             id = "v2_c1",
                             start = 0.1,
                             end = 1.8,
                             text = "برج‌های دوقلو و معماری درخشان",
-                            words = SrtParser.buildWordTimings("برج‌های دوقلو و معماری درخشان", 0.1, 1.8)
+                            entranceSfx = "Magical Shimmer",
+                            words = listOf(
+                                WordTiming(0.10, 0.55, "برج‌های", customColor = "#38BDF8", scaleBoost = 1.2, animation = "Glow", sfx = "Sparkle"),
+                                WordTiming(0.55, 0.95, "دوقلو", customColor = "#FACC15", scaleBoost = 1.25, animation = "Pop"),
+                                WordTiming(0.95, 1.15, "و", customColor = "#FFFFFF"),
+                                WordTiming(1.15, 1.50, "معماری", customColor = "#FFFFFF", animation = "Bounce"),
+                                WordTiming(1.50, 1.80, "درخشان", customColor = "#00F0FF", scaleBoost = 1.2, animation = "Glow")
+                            )
                         ),
                         CaptionCue(
                             id = "v2_c2",
                             start = 1.9,
                             end = 3.4,
                             text = "د مصنوعي ځیرکتیا سره د ویډیو ایډیټ",
+                            entranceSfx = "Riser",
                             words = SrtParser.buildWordTimings("د مصنوعي ځیرکتیا سره د ویډیو ایډیټ", 1.9, 3.4)
                         ),
                         CaptionCue(
@@ -586,6 +1260,8 @@ object SampleProjectsFactory {
                             start = 3.5,
                             end = 4.9,
                             text = "جدید موشن گرافکس اور اردو سب ٹائٹلز",
+                            customStyle = StylePresetCatalog.findByNameOrId("elegant_nastaliq")?.style,
+                            entranceSfx = "Metallic Impact",
                             words = SrtParser.buildWordTimings("جدید موشن گرافکس اور اردو سب ٹائٹلز", 3.5, 4.9)
                         )
                     )
@@ -671,7 +1347,7 @@ object SampleProjectsFactory {
                 AudioClip(
                     id = "aud_v2_shimmer",
                     name = "Celestial Hologram Shimmer",
-                    category = "Shimmer",
+                    category = "Magical Shimmer",
                     source = "sfx/shimmer_celestial.wav",
                     start = 0.2,
                     duration = 0.8,

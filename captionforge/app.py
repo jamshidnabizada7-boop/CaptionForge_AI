@@ -555,6 +555,36 @@ def detect_face_trajectory(video: Path, cue_start: float, cue_end: float, trim_s
     return pos1 or pos2
 
 
+def _resolve_three_tiers(cue: dict) -> tuple[str, str, str]:
+    t1 = str(cue.get('tier1Text') or '').strip()
+    t2 = str(cue.get('tier2Text') or '').strip()
+    t3 = str(cue.get('tier3Text') or '').strip()
+    if t1 or t2 or t3:
+        return (t1, t2 or str(cue.get('text', '')).strip(), t3)
+    words = cue.get('words') or []
+    if any(int(w.get('tier', 0) or 0) in (1, 2, 3) for w in words):
+        w1 = ' '.join(str(w.get('text', '')) for w in words if int(w.get('tier', 0) or 0) == 1).strip()
+        w2 = ' '.join(str(w.get('text', '')) for w in words if int(w.get('tier', 0) or 0) in (0, 2)).strip()
+        w3 = ' '.join(str(w.get('text', '')) for w in words if int(w.get('tier', 0) or 0) == 3).strip()
+        return (w1, w2 or str(cue.get('text', '')).strip(), w3)
+    raw = str(cue.get('text', '')).strip()
+    lines = [ln.strip() for ln in raw.split('\n') if ln.strip()]
+    if len(lines) >= 3:
+        return (lines[0], lines[1], ' '.join(lines[2:]))
+    if len(lines) == 2:
+        return (lines[0], lines[1], '')
+    tokens = [tok for tok in raw.split() if tok]
+    if len(tokens) >= 5:
+        return (' '.join(tokens[:2]), ' '.join(tokens[2:-2]), ' '.join(tokens[-2:]))
+    if len(tokens) == 4:
+        return (tokens[0], ' '.join(tokens[1:3]), tokens[3])
+    if len(tokens) == 3:
+        return (tokens[0], tokens[1], tokens[2])
+    if len(tokens) == 2:
+        return (tokens[0], tokens[1], '')
+    return ('', raw, '')
+
+
 def build_ass(pr: dict, dest: Path, width: int, height: int, skip_procedural_overlays: bool = False):
     header = f"""[Script Info]
 Title: CaptionForge Cinematic
@@ -577,9 +607,11 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
         if not tr.get('visible', True) or not tr.get('captions'):
             continue
         st = tr.get('style', {})
-        size = max(13, min(90, float(st.get('fontSize', 25)))) * (width / 360)
-        font = st.get('font', 'Noto Sans').replace(',', '')
+        size = max(13, min(96, float(st.get('fontSize', 25)))) * (width / 360)
+        font = st.get('font', 'Vazirmatn').replace(',', '')
         color = ass_color(st.get('textColor', '#ffffff'))
+        sec_color = ass_color(st.get('secondaryColor', '#FF7A00'))
+        outline_col = ass_color(st.get('outlineColor', '#000000'))
         overlay = st.get('overlay', 'None')
         if overlay == 'Solid':
             bgcolor = '&H00000000&'
@@ -592,15 +624,18 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
             border = 3 if st.get('bgEnabled') else 1
         style = f'track{i}'
         align = {'left': 4, 'center': 5, 'right': 6}.get(st.get('align', 'center'), 5)
-        bold_flag = -1 if st.get('preset') in ('Bold', 'Orange Headline', 'Neon') else 0
+        bold_flag = -1 if int(st.get('fontWeight', 700)) >= 600 or st.get('preset') in ('Bold', 'Orange Headline', 'Orange Persian Kinetic', 'Neon') else 0
         spacing = int(float(st.get('letterSpacing', 0)))
-        styles.append(f'Style: {style},{font},{size:.1f},{color},&H0000E8FF,&H00000000&,{bgcolor},{bold_flag},0,0,0,100,100,{spacing},0,{border},{max(0, float(st.get("outline", 2)))},0,{align},20,20,30,1')
+        outline_w = max(0.0, float(st.get('outline', 2.5)))
+        shadow_d = max(0.0, float(st.get('shadowDepth', 2.0)) + float(st.get('extrusion3D', 0.0)) * 0.6)
+        styles.append(f'Style: {style},{font},{size:.1f},{color},{sec_color},{outline_col},{bgcolor},{bold_flag},0,0,0,100,100,{spacing},0,{border},{outline_w:.1f},{shadow_d:.1f},{align},20,20,30,1')
         visible = [c for c in tr['captions'] if c.get('text', '').strip()]
 
         for ci, cue in enumerate(visible):
+            cue_st = cue.get('customStyle') or st
             c_start = float(cue.get('start', 0))
             c_end = float(cue.get('end', c_start + 1.0))
-            early = max(0.0, float(st.get('early', 0)))
+            early = max(0.0, float(cue_st.get('early', 0)))
 
             if trim_start > 0 and c_end <= trim_start: continue
             if c_start >= trim_end: continue
@@ -613,10 +648,14 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
             start = max(0.0, round(rel_start, 3))
             end = min(length, max(start + 0.08, round(rel_end, 3)))
 
-            x = {'left': int(width * 0.09), 'center': width // 2, 'right': int(width * 0.91)}.get(st.get('align', 'center'), width // 2)
-            y = int(height * max(0.12, min(0.93, float(st.get('yPos', 0.76)))))
+            custom_x = cue_st.get('xPos')
+            if custom_x is not None:
+                x = int(width * max(0.08, min(0.92, float(custom_x))))
+            else:
+                x = {'left': int(width * 0.09), 'center': width // 2, 'right': int(width * 0.91)}.get(cue_st.get('align', 'center'), width // 2)
+            y = int(height * max(0.10, min(0.93, float(cue_st.get('yPos', 0.76)))))
 
-            face_traj = detect_face_trajectory(dest.parent / pr['source'], c_start, c_end, trim_start, width, height) if st.get('followFace') else None
+            face_traj = detect_face_trajectory(dest.parent / pr['source'], c_start, c_end, trim_start, width, height) if cue_st.get('followFace') else None
             dur_ms = int(max(100, (end - start) * 1000))
 
             if face_traj:
@@ -629,11 +668,19 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
             else:
                 prefix = f'{{\\pos({x},{y})}}'
 
-            animate = st.get('animation', 'None')
+            rot_deg = float(cue_st.get('rotation', 0.0))
+            if abs(rot_deg) > 0.1:
+                prefix += f'{{\\frz{int(rot_deg)}}}'
+
+            animate = cue_st.get('animation', 'None')
+            exit_anim = cue_st.get('exitAnimation', 'Fade')
+            fade_out_ms = 140 if exit_anim in ('Fade', 'Blur Out', 'Scale Down') else 0
             if animate == 'Fade':
-                prefix += r'{\fad(150,150)}'
+                prefix += f'{{\\fad(150,{fade_out_ms})}}'
             elif animate == 'Pop':
                 prefix += r'{\fscx75\fscy75\t(0,120,\fscx115\fscy115)\t(120,220,\fscx100\fscy100)}'
+                if fade_out_ms:
+                    prefix += f'{{\\fad(0,{fade_out_ms})}}'
             elif animate == 'Zoom':
                 prefix += r'{\fscx30\fscy30\t(0,200,\fscx100\fscy100)}'
             elif animate == 'Slide up' and not (face_traj and len(face_traj) == 4):
@@ -643,32 +690,56 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
             elif animate == 'Bounce':
                 prefix += r'{\fscx85\fscy85\t(0,100,\fscx120\fscy120)\t(100,240,\fscx100\fscy100)}'
 
-            # Additional glow tags if enabled
-            if float(st.get('glow', 0)) > 0:
-                glow_r = int(float(st.get('glow', 0)))
-                glow_c = ass_color(st.get('glowColor', '#00F0FF'))
+            if float(cue_st.get('glow', 0)) > 0:
+                glow_r = int(float(cue_st.get('glow', 0)))
+                glow_c = ass_color(cue_st.get('glowColor', '#00F0FF'))
                 prefix += f'{{\\blur{glow_r}\\3c{glow_c}}}'
 
-            text = ass_text(cue['text'])
-            if st.get('oneLine'):
-                text = text.replace(r'\N', ' ')
+            is_three_tier = bool(cue_st.get('threeTierLayout')) or cue_st.get('preset') == 'Orange Persian Kinetic' or bool(cue.get('tier1Text') or cue.get('tier2Text'))
+            if is_three_tier:
+                t1, t2, t3 = _resolve_three_tiers(cue)
+                c1 = ass_color(cue_st.get('tier1Color', '#FFFFFF'))
+                c2 = ass_color(cue_st.get('tier2Color', '#FF7A00'))
+                c3 = ass_color(cue_st.get('tier3Color', '#FACC15'))
+                fs_t1 = int(size * 0.78)
+                fs_t2 = int(size * 1.32)
+                fs_t3 = int(size * 0.86)
+                parts = []
+                if t1:
+                    parts.append(f'{{\\fs{fs_t1}\\c{c1}\\b1}}{ass_text(t1)}')
+                if t2:
+                    parts.append(f'{{\\fs{fs_t2}\\c{c2}\\b1}}{ass_text(t2)}')
+                if t3:
+                    parts.append(f'{{\\fs{fs_t3}\\c{c3}\\b1}}{ass_text(t3)}')
+                text = r'\N'.join(parts)
+            else:
+                text = ass_text(cue['text'])
+                if cue_st.get('oneLine'):
+                    text = text.replace(r'\N', ' ')
 
-            if st.get('karaoke') and cue.get('words'):
-                items = []
-                for w in cue['words']:
-                    w_start = float(w.get('start', c_start))
-                    w_end = float(w.get('end', w_start + 0.1))
-                    rel_ws = max(0.0, w_start - trim_start)
-                    rel_we = min(length, max(rel_ws + 0.05, w_end - trim_start))
-                    ws = max(start, min(end, rel_ws))
-                    we = max(ws + 0.05, min(end, rel_we))
-                    span = int(max(1, (we - ws) * 100))
-                    items.append(f'{{\\k{span}}}' + ass_text(w.get('text', '')))
-                text = ' '.join(items)
+                if cue_st.get('karaoke') and cue.get('words'):
+                    items = []
+                    for w in cue['words']:
+                        w_start = float(w.get('start', c_start))
+                        w_end = float(w.get('end', w_start + 0.1))
+                        rel_ws = max(0.0, w_start - trim_start)
+                        rel_we = min(length, max(rel_ws + 0.05, w_end - trim_start))
+                        ws = max(start, min(end, rel_ws))
+                        we = max(ws + 0.05, min(end, rel_we))
+                        span = int(max(1, (we - ws) * 100))
+                        w_tag = f'\\k{span}'
+                        if w.get('customColor'):
+                            w_tag += f'\\c{ass_color(w["customColor"])}'
+                        boost = float(w.get('scaleBoost', 1.0) or 1.0)
+                        if abs(boost - 1.0) > 0.04:
+                            sc_pct = int(boost * 100)
+                            w_tag += f'\\fscx{sc_pct}\\fscy{sc_pct}'
+                        items.append(f'{{{w_tag}}}' + ass_text(w.get('text', '')))
+                    text = ' '.join(items)
 
             events.append((start, f'Dialogue: {i+1},{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{prefix}{text}'))
 
-    styles.append('Style: Default,Noto Sans,25,&H00FFFFFF,&H0000E8FF,&H00000000&,&H55181124,-1,0,0,0,100,100,0,0,1,2,0,5,20,20,30,1')
+    styles.append('Style: Default,Vazirmatn,25,&H00FFFFFF,&H0000E8FF,&H00000000&,&H55181124,-1,0,0,0,100,100,0,0,1,2,0,5,20,20,30,1')
     output = header + '\n'.join(styles) + '\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
 
     # Advanced Keyframe Motion Graphics & Composited Overlays
@@ -692,10 +763,9 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
         keyframes = ov.get('keyframes', [])
         content = ass_text(ov.get('content') or ov.get('name') or '')
         depth_layer = 0 if ov.get('isBackground') or ov.get('depthLayer') == 0 or ov_type == 'soft_bg_text' else 3
-        font_name = 'Impact' if ov_type == 'metallic_banner' else ('Segoe UI' if ov_type == 'glow_hologram' else 'Vazirmatn')
+        font_name = 'Cinzel' if ov_type == 'metallic_banner' else ('Orbitron' if ov_type == 'glow_hologram' else 'Vazirmatn')
 
         if keyframes and len(keyframes) >= 2:
-            # Interpolated Keyframe Animation Sequence
             sorted_kf = sorted(keyframes, key=lambda k: float(k.get('time', 0.0)))
             t_first = float(sorted_kf[0].get('time', 0.0))
             t_last = float(sorted_kf[-1].get('time', 0.0))
@@ -733,7 +803,6 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
                     tag = f'{{\\move({x1},{y1},{x2},{y2},0,{dur_ms})\\an5\\fn{font_name}\\fs{int(32 * width/360)}\\c{c1}\\3c&H000000&\\bord3\\shad2\\fscx{sc1}\\fscy{sc1}\\frz{r1}\\alpha{op1}\\t(0,{dur_ms},\\fscx{sc2}\\fscy{sc2}\\frz{r2}\\alpha{op2})}}'
                     events.append((seg_start, f'Dialogue: {depth_layer},{ass_time(seg_start)},{ass_time(seg_end)},Default,,0,0,0,,{tag}{content}'))
         else:
-            # Single-segment overlay with static or predefined transform
             ox = int(width * float(ov.get('xPos', 0.5)))
             oy = int(height * float(ov.get('yPos', 0.5)))
             scale_pct = int(float(ov.get('scale', 1.0)) * 100)
@@ -747,21 +816,21 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
                 events.append((rel_start, f'Dialogue: 3,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{tag}{title}'))
             elif ov_type == 'metallic_banner':
                 title_text = content or 'AUSTRALIA'
-                events.append((rel_start, f'Dialogue: 3,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnImpact\\fs{int(42 * width/360)}\\c&HE2E8F0&\\3c&H1E293B&\\bord5\\shad3\\fad(100,120)\\fsp4\\fscx{scale_pct}\\fscy{scale_pct}{rot_tag}}}{title_text}'))
+                events.append((rel_start, f'Dialogue: 3,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnCinzel\\fs{int(42 * width/360)}\\c&HE2E8F0&\\3c&H1E293B&\\bord5\\shad3\\fad(100,120)\\fsp4\\fscx{scale_pct}\\fscy{scale_pct}{rot_tag}}}{title_text}'))
             elif ov_type == 'glow_hologram':
                 holo_text = content or '◈ ILLUMINATED HOLOGRAM ◈'
-                events.append((rel_start, f'Dialogue: {depth_layer},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnSegoe UI\\fs{int(32 * width/360)}\\c&H00F0FF&\\3c&H00A0E0&\\bord6\\shad0\\blur8\\fad(150,150)\\fscx{scale_pct}\\fscy{scale_pct}{rot_tag}}}{holo_text}'))
-                events.append((rel_start, f'Dialogue: {depth_layer+1},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnSegoe UI\\fs{int(32 * width/360)}\\c&HFFFFFF&\\3c&H004080&\\bord2\\shad0\\fad(150,150)\\fscx{scale_pct}\\fscy{scale_pct}{rot_tag}}}{holo_text}'))
+                events.append((rel_start, f'Dialogue: {depth_layer},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnOrbitron\\fs{int(32 * width/360)}\\c&H00F0FF&\\3c&H00A0E0&\\bord6\\shad0\\blur8\\fad(150,150)\\fscx{scale_pct}\\fscy{scale_pct}{rot_tag}}}{holo_text}'))
+                events.append((rel_start, f'Dialogue: {depth_layer+1},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnOrbitron\\fs{int(32 * width/360)}\\c&HFFFFFF&\\3c&H004080&\\bord2\\shad0\\fad(150,150)\\fscx{scale_pct}\\fscy{scale_pct}{rot_tag}}}{holo_text}'))
             elif ov_type == 'light_leak':
-                events.append((rel_start, f'Dialogue: 3,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnArial\\fs{int(30 * width/360)}\\c&HD946EF&\\3c&H9333EA&\\bord4\\shad4\\fad(80,140)\\alpha&H40&{rot_tag}}}{content or "✦ LIGHT FLARE ✦"}'))
+                events.append((rel_start, f'Dialogue: 3,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnInter\\fs{int(30 * width/360)}\\c&HD946EF&\\3c&H9333EA&\\bord4\\shad4\\fad(80,140)\\alpha&H40&{rot_tag}}}{content or "✦ LIGHT FLARE ✦"}'))
             elif ov_type in ('flag_graphic', 'waving_flag'):
-                events.append((rel_start, f'Dialogue: {depth_layer},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnArial\\fs{int(30 * width/360)}\\c&HFFFFFF&\\3c&H1E3A8A&\\bord4\\shad2\\fad(120,120){rot_tag}}}{content or "⚑ FLAG OVERLAY ⚑"}'))
+                events.append((rel_start, f'Dialogue: {depth_layer},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnInter\\fs{int(30 * width/360)}\\c&HFFFFFF&\\3c&H1E3A8A&\\bord4\\shad2\\fad(120,120){rot_tag}}}{content or "⚑ FLAG OVERLAY ⚑"}'))
             elif ov_type == 'soft_bg_text':
                 events.append((rel_start, f'Dialogue: 0,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnVazirmatn\\fs{int(32 * width/360)}\\c&HCCCCCC&\\3c&H000000&\\bord2\\blur6\\alpha&H88&\\fad(200,200){rot_tag}}}{content or "برج‌های دوگانه بلند ترین"}'))
             elif ov_type == 'end_accent':
-                events.append((rel_start, f'Dialogue: 3,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnArial\\fs{int(22 * width/360)}\\c&H3539E5&\\3c&H000000&\\bord2\\shad1\\fad(100,100){rot_tag}}}{content or "CaptionForge Studio"}'))
+                events.append((rel_start, f'Dialogue: 3,{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnInter\\fs{int(22 * width/360)}\\c&H3539E5&\\3c&H000000&\\bord2\\shad1\\fad(100,100){rot_tag}}}{content or "CaptionForge Studio"}'))
             else:
-                events.append((rel_start, f'Dialogue: {depth_layer},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnNoto Sans\\fs{int(26 * width/360)}\\c{ov_color}\\3c&H000000&\\bord3\\shad2\\fad(120,120){rot_tag}}}{content}'))
+                events.append((rel_start, f'Dialogue: {depth_layer},{ass_time(rel_start)},{ass_time(rel_end)},Default,,0,0,0,,{{\\pos({ox},{oy})\\an5\\fnVazirmatn\\fs{int(26 * width/360)}\\c{ov_color}\\3c&H000000&\\bord3\\shad2\\fad(120,120){rot_tag}}}{content}'))
 
     output += '\n'.join(line for _, line in sorted(events, key=lambda x: x[0])) + '\n'
     dest.write_text(output, encoding='utf-8')
@@ -773,59 +842,68 @@ def ass_time(s):
 
 
 def mix_multitrack_audio(pr: dict, p: Path, length: float) -> Path | None:
-    """Mixes 11-category synthesized SFX and timeline audio clips with clipping protection."""
+    """Mixes 60 studio SFX presets (global, cue-entrance/exit, word-level) and timeline audio clips with ducking."""
     rate = SFX_SAMPLE_RATE  # 44100
     limit = min(length, 1800)
     samples = int(rate * limit)
     buf = bytearray(samples * 2)
     has_audio = False
 
-    # 1. Caption-triggered SFX
     fx = pr.get('effects', {})
     typ = fx.get('sfx', 'None')
-    if typ != 'None':
-        times = []
-        trim_start = float(pr.get('trim', {}).get('start', 0))
-        trim_end = float(pr.get('trim', {}).get('end', pr.get('duration', 10)))
-        for t in pr.get('tracks', []):
-            if not t.get('visible', True): continue
-            for c in t.get('captions', []):
-                cs = float(c.get('start', 0))
-                ce = float(c.get('end', cs + 1.0))
-                if trim_start > 0 and ce <= trim_start: continue
-                if cs >= trim_end: continue
-                rel = max(0.0, cs - trim_start)
-                if 0 <= rel < length:
-                    if fx.get('sfxMode') == 'Word' and c.get('words'):
-                        for w in c['words']:
-                            ws = float(w.get('start', cs))
-                            ws_rel = max(0.0, ws - trim_start)
-                            if 0 <= ws_rel < length:
-                                times.append(ws_rel)
-                    else:
-                        times.append(rel)
-            if times: break
+    sfx_mode = fx.get('sfxMode', 'Sentence')
+    base_gain = max(0.0, min(1.0, float(fx.get('sfxVolume', 60)) / 100.0)) * 0.28
 
-        if times:
-            gain = max(0.0, min(1.0, float(fx.get('sfxVolume', 40)) / 100.0)) * 0.25
-            pcm = get_pcm_for_preset(typ)
-            pcm_samples = len(pcm) // 2
-            for tm in times[:800]:
-                start_idx = int(tm * rate)
-                for j in range(pcm_samples):
-                    k = start_idx + j
-                    if k >= samples: break
-                    raw_s = struct.unpack_from('<h', pcm, j * 2)[0] / 32768.0
-                    val = raw_s * gain
-                    prev = struct.unpack_from('<h', buf, k * 2)[0]
-                    mixed = max(-32768, min(32767, prev + int(val * 32767.0)))
-                    struct.pack_into('<h', buf, k * 2, mixed)
-                has_audio = True
+    # Collect (relative_time_sec, sfx_preset_name) triggers
+    sfx_triggers: list[tuple[float, str]] = []
+    trim_start = float(pr.get('trim', {}).get('start', 0))
+    trim_end = float(pr.get('trim', {}).get('end', pr.get('duration', 10)))
+
+    for t in pr.get('tracks', []):
+        if not t.get('visible', True): continue
+        for c in t.get('captions', []):
+            cs = float(c.get('start', 0))
+            ce = float(c.get('end', cs + 1.0))
+            if trim_start > 0 and ce <= trim_start: continue
+            if cs >= trim_end: continue
+            rel_cs = max(0.0, cs - trim_start)
+            rel_ce = max(0.0, ce - trim_start)
+
+            cue_ent = c.get('entranceSfx', 'None')
+            if cue_ent and cue_ent != 'None' and 0 <= rel_cs < length:
+                sfx_triggers.append((rel_cs, cue_ent))
+            elif typ != 'None' and sfx_mode in ('Sentence', 'Both') and 0 <= rel_cs < length:
+                sfx_triggers.append((rel_cs, typ))
+
+            cue_exit = c.get('exitSfx', 'None')
+            if cue_exit and cue_exit != 'None' and 0 <= rel_ce < length:
+                sfx_triggers.append((rel_ce, cue_exit))
+
+            for w in c.get('words', []):
+                ws = float(w.get('start', cs))
+                rel_ws = max(0.0, ws - trim_start)
+                w_sfx = w.get('sfx', 'None')
+                if w_sfx and w_sfx != 'None' and 0 <= rel_ws < length:
+                    sfx_triggers.append((rel_ws, w_sfx))
+                elif typ != 'None' and sfx_mode == 'Word' and 0 <= rel_ws < length:
+                    sfx_triggers.append((rel_ws, typ))
+
+    for (tm, preset_key) in sfx_triggers[:900]:
+        pcm = get_pcm_for_preset(preset_key)
+        pcm_samples = len(pcm) // 2
+        start_idx = int(tm * rate)
+        for j in range(pcm_samples):
+            k = start_idx + j
+            if k >= samples: break
+            raw_s = struct.unpack_from('<h', pcm, j * 2)[0] / 32768.0
+            val = raw_s * base_gain
+            prev = struct.unpack_from('<h', buf, k * 2)[0]
+            mixed = max(-32768, min(32767, prev + int(val * 32767.0)))
+            struct.pack_into('<h', buf, k * 2, mixed)
+        has_audio = True
 
     # Precalculate active caption speech intervals for audio ducking
     caption_intervals = []
-    trim_start = float(pr.get('trim', {}).get('start', 0))
-    trim_end = float(pr.get('trim', {}).get('end', pr.get('duration', 10)))
     for t in pr.get('tracks', []):
         if not t.get('visible', True): continue
         for c in t.get('captions', []):
@@ -844,17 +922,17 @@ def mix_multitrack_audio(pr: dict, p: Path, length: float) -> Path | None:
                 return 0.25  # -12 dB attenuation during speech
         return 1.0
 
-    # 2. Project Timeline Audio Clips (SFX, Music, Voiceover)
+    # 2. Project Timeline Audio Clips (SFX, Music Loops, Voiceover)
     for clip in pr.get('audioClips', []):
         c_start = float(clip.get('start', 0.0))
         c_dur = float(clip.get('duration', 1.0))
         c_vol = float(clip.get('volume', 1.0))
-        c_cat = clip.get('category', 'sfx')
+        c_cat = clip.get('category', 'Soft Pop')
         c_src = clip.get('source', '')
         enable_ducking = bool(clip.get('ducking', False))
 
         pcm = get_pcm_for_preset(c_src or c_cat)
-        pcm_samples = len(pcm) // 2
+        pcm_samples = max(1, len(pcm) // 2)
         dur_samples = int(c_dur * rate)
         start_idx = int(c_start * rate)
 

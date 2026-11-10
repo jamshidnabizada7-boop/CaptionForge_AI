@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CaptionForge"
+rootProject.name = "MagicCap"
 include(":app")

@@ -35,13 +35,16 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.AlertDialog
@@ -73,10 +76,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -84,6 +91,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.captionforge.android.data.ProbedVideoInfo
 import com.captionforge.android.model.Project
 import com.captionforge.android.ui.theme.AppColors
+import com.captionforge.android.ui.theme.BebasNeueFontFamily
+import com.captionforge.android.ui.theme.LalezarFontFamily
+import com.captionforge.android.ui.theme.VazirmatnFontFamily
 import com.captionforge.android.viewmodel.CaptionForgeViewModel
 import java.util.Locale
 import kotlin.math.max
@@ -127,40 +137,85 @@ fun HomeScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xFF121026), AppColors.Background)
+                        )
+                    )
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Signature "MAGIC EDITOR" Stacked Rounded Indigo Badge (inspired by reference icon)
                     Box(
                         modifier = Modifier
-                            .size(34.dp)
-                            .clip(RoundedCornerShape(9.dp))
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .background(
                                 Brush.linearGradient(
-                                    listOf(AppColors.PrimaryPurple, AppColors.AccentCyan)
+                                    listOf(Color(0xFF4338CA), Color(0xFF6366F1), Color(0xFF9333EA))
                                 )
+                            )
+                            .border(
+                                1.dp,
+                                Color.White.copy(alpha = 0.28f),
+                                RoundedCornerShape(12.dp)
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.ClosedCaption,
-                            contentDescription = "CaptionForge Logo",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "MAGIC",
+                                fontFamily = BebasNeueFontFamily,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color(0xFFE0E7FF),
+                                lineHeight = 10.sp
+                            )
+                            Text(
+                                text = "EDITOR",
+                                fontFamily = BebasNeueFontFamily,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White,
+                                lineHeight = 10.sp
+                            )
+                        }
                     }
-                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
                     Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "MagicCap",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = AppColors.AccentOrange.copy(alpha = 0.2f),
+                                border = BorderStroke(1.dp, AppColors.AccentOrange.copy(alpha = 0.6f))
+                            ) {
+                                Text(
+                                    text = "PRO",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = AppColors.AccentOrange,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                         Text(
-                            text = "CaptionForge",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = AppColors.TextPrimary
-                        )
-                        Text(
-                            text = "AI Video & Motion Studio",
+                            text = "CaptionForge • AI Kinetic Video Studio",
                             fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
                             color = AppColors.TextSecondary
                         )
                     }
@@ -171,33 +226,33 @@ fun HomeScreen(
                         modifier = Modifier
                             .clickable { showServerDialog = true }
                             .testTag("backend_status_chip"),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = if (isBackendOnline) {
-                            AppColors.AccentGreen.copy(alpha = 0.15f)
+                            AppColors.AccentGreen.copy(alpha = 0.14f)
                         } else {
                             AppColors.SurfaceElevated
                         },
                         border = BorderStroke(
                             1.dp,
-                            if (isBackendOnline) AppColors.AccentGreen else AppColors.SurfaceBorder
+                            if (isBackendOnline) AppColors.AccentGreen.copy(alpha = 0.7f) else AppColors.SurfaceBorder
                         )
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 imageVector = if (isBackendOnline) Icons.Default.CloudDone else Icons.Default.CloudOff,
                                 contentDescription = "Backend connectivity status",
-                                tint = if (isBackendOnline) AppColors.AccentGreen else AppColors.AccentAmber,
-                                modifier = Modifier.size(14.dp)
+                                tint = if (isBackendOnline) AppColors.AccentGreen else AppColors.AccentCyan,
+                                modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = if (isBackendOnline) "FastAPI Online" else "Local Studio",
+                                text = if (isBackendOnline) "AI Cloud" else "On-Device",
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (isBackendOnline) AppColors.AccentGreen else AppColors.TextSecondary
+                                fontWeight = FontWeight.Bold,
+                                color = if (isBackendOnline) AppColors.AccentGreen else Color.White
                             )
                         }
                     }
@@ -220,7 +275,7 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.WorkspacePremium,
                             contentDescription = "Studio Features",
-                            tint = AppColors.PrimaryPurpleLight
+                            tint = AppColors.AccentAmber
                         )
                     }
                 }
@@ -230,194 +285,419 @@ fun HomeScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .drawBehind {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFF4F46E5).copy(alpha = 0.16f), Color.Transparent),
+                            center = Offset(size.width * 0.85f, size.height * 0.12f),
+                            radius = size.width * 0.7f
+                        )
+                    )
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFFFF6B00).copy(alpha = 0.10f), Color.Transparent),
+                            center = Offset(size.width * 0.15f, size.height * 0.42f),
+                            radius = size.width * 0.6f
+                        )
+                    )
+                },
             contentAlignment = Alignment.TopCenter
         ) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 600.dp),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Hero Feature Card
+                // 1. Flagship "Magic Editor" Hero Studio Card + Primary CTA
                 item {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(20.dp))
                             .background(
                                 Brush.linearGradient(
-                                    listOf(Color(0xFF2E1065), Color(0xFF161224))
+                                    colors = listOf(
+                                        Color(0xFF281C66),
+                                        Color(0xFF171336),
+                                        Color(0xFF0F0D21)
+                                    )
                                 )
                             )
                             .border(
                                 1.5.dp,
-                                AppColors.PrimaryPurple.copy(alpha = 0.55f),
-                                RoundedCornerShape(18.dp)
+                                Brush.linearGradient(
+                                    listOf(
+                                        Color(0xFF6366F1),
+                                        Color(0xFFA855F7),
+                                        Color(0xFFFF6B00).copy(alpha = 0.65f)
+                                    )
+                                ),
+                                RoundedCornerShape(20.dp)
                             )
-                            .clickable { showProSheet = true }
-                            .padding(18.dp)
+                            .padding(14.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(46.dp)
-                                    .clip(CircleShape)
-                                    .background(AppColors.PrimaryPurple.copy(alpha = 0.25f)),
-                                contentAlignment = Alignment.Center
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = "AI Subtitles",
-                                    tint = AppColors.PrimaryPurpleLight,
-                                    modifier = Modifier.size(24.dp)
-                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "MAGIC AI CAPTION & VFX STUDIO",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = AppColors.AccentCyan
+                                    )
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text(
+                                        text = "Viral Kinetic Captions & 3D Titles",
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "3-Tier RTL • 26 Pro Fonts • 60 Studio SFX",
+                                        fontSize = 11.sp,
+                                        color = AppColors.TextSecondary
+                                    )
+                                }
+
+                                // Live Floating Kinetic Preview Pill
+                                Surface(
+                                    modifier = Modifier
+                                        .padding(start = 8.dp)
+                                        .clickable { showProSheet = true },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFF0A0914).copy(alpha = 0.85f),
+                                    border = BorderStroke(1.dp, AppColors.AccentOrange.copy(alpha = 0.7f))
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = "ویزای تحصیلی",
+                                            fontFamily = VazirmatnFontFamily,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = "فنلاند",
+                                            fontFamily = LalezarFontFamily,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = AppColors.AccentOrange
+                                        )
+                                    }
+                                }
                             }
-                            Spacer(modifier = Modifier.width(14.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Auto subtitles, beautifully styled",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color.White
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Multi-track timeline • Persian/Dari, Pashto, Urdu & Arabic RTL • Kinetic VFX & SFX",
-                                    fontSize = 12.sp,
-                                    color = AppColors.TextSecondary
-                                )
+
+                            // Primary Gradient CTA Button ("New Project")
+                            Button(
+                                onClick = { showNewProjectSheet = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("new_project_button"),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.MagicIndigo
+                                ),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(AppColors.MagicButtonGradient),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.AddCircle,
+                                            contentDescription = "New Project",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "New Magic Project — Import Video",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
                             }
-                            Icon(
-                                imageVector = Icons.Default.ChevronRight,
-                                contentDescription = "Details",
-                                tint = AppColors.PrimaryPurpleLight
+                        }
+                    }
+                }
+
+                // 2. Instant Reference Showcase Cards (Video 1 & Video 2)
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Featured Cinematic Templates",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "TAP TO EDIT LIVE",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AppColors.AccentCyan
                             )
                         }
-                    }
-                }
 
-                // Primary CTA: New Project
-                item {
-                    Button(
-                        onClick = { showNewProjectSheet = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .testTag("new_project_button"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.PrimaryPurple)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AddCircle,
-                            contentDescription = "New Project",
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "New Project — Import Video",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                // Instant Reference Showcase Cards (Video 1 & Video 2)
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Card(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    viewModel.openDemoShowcase(1, onOpenEditor)
-                                }
-                                .testTag("demo_video1_card"),
-                            colors = CardDefaults.cardColors(containerColor = AppColors.Surface),
-                            border = BorderStroke(1.dp, Color(0xFFFF7A00).copy(alpha = 0.5f)),
-                            shape = RoundedCornerShape(14.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "VIDEO 1 PRESET",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFFFF7A00)
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Persian Orange Hero",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "Dual FA+EN tracks + Flare",
-                                    fontSize = 11.sp,
-                                    color = AppColors.TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            // Reference Video 1 Showcase Card
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        viewModel.openDemoShowcase(1, onOpenEditor)
+                                    }
+                                    .testTag("demo_video1_card"),
+                                colors = CardDefaults.cardColors(containerColor = AppColors.Surface),
+                                border = BorderStroke(1.2.dp, AppColors.AccentOrange.copy(alpha = 0.65f)),
+                                shape = RoundedCornerShape(18.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = AppColors.AccentOrange.copy(alpha = 0.18f)
+                                        ) {
+                                            Text(
+                                                text = "REF VIDEO #1",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = AppColors.AccentOrange,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = "9:16 • 1080p",
+                                            fontSize = 9.sp,
+                                            color = AppColors.TextSecondary
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    // Mini visual stage preview
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(74.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    listOf(Color(0xFF2B1206), Color(0xFF0E0B1A))
+                                                )
+                                            )
+                                            .border(
+                                                1.dp,
+                                                AppColors.AccentOrange.copy(alpha = 0.35f),
+                                                RoundedCornerShape(12.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text(
+                                                text = "ویزای تحصیلی",
+                                                fontFamily = VazirmatnFontFamily,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                            Text(
+                                                text = "فنلاند",
+                                                fontFamily = LalezarFontFamily,
+                                                fontSize = 20.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = AppColors.AccentOrange
+                                            )
+                                            Text(
+                                                text = "بدون مدرک زبان",
+                                                fontFamily = VazirmatnFontFamily,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AppColors.AccentAmber
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Text(
+                                        text = "3-Tier Persian Kinetic",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "3D Orange Hero + Word SFX",
+                                        fontSize = 11.sp,
+                                        color = AppColors.TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            // Reference Video 2 Showcase Card
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        viewModel.openDemoShowcase(2, onOpenEditor)
+                                    }
+                                    .testTag("demo_video2_card"),
+                                colors = CardDefaults.cardColors(containerColor = AppColors.Surface),
+                                border = BorderStroke(1.2.dp, AppColors.AccentCyan.copy(alpha = 0.65f)),
+                                shape = RoundedCornerShape(18.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = AppColors.AccentCyan.copy(alpha = 0.18f)
+                                        ) {
+                                            Text(
+                                                text = "REF VIDEO #2",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = AppColors.AccentCyan,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = "VFX • Tracked",
+                                            fontSize = 9.sp,
+                                            color = AppColors.TextSecondary
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    // Mini visual stage preview
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(74.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    listOf(Color(0xFF072235), Color(0xFF100C24))
+                                                )
+                                            )
+                                            .border(
+                                                1.dp,
+                                                AppColors.AccentCyan.copy(alpha = 0.35f),
+                                                RoundedCornerShape(12.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text(
+                                                text = "◈ HOLOGRAM VFX ◈",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = AppColors.AccentCyan
+                                            )
+                                            Text(
+                                                text = "AUSTRALIA",
+                                                fontFamily = BebasNeueFontFamily,
+                                                fontSize = 20.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = Color(0xFFE2E8F0),
+                                                letterSpacing = 2.sp
+                                            )
+                                            Text(
+                                                text = "Subject Depth + Flag",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = AppColors.PrimaryPurpleLight
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+
+                                    Text(
+                                        text = "Subject Depth & VFX",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "Behind-Subject Text + Holo",
+                                        fontSize = 11.sp,
+                                        color = AppColors.TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
-
-                        Card(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    viewModel.openDemoShowcase(2, onOpenEditor)
-                                }
-                                .testTag("demo_video2_card"),
-                            colors = CardDefaults.cardColors(containerColor = AppColors.Surface),
-                            border = BorderStroke(1.dp, AppColors.AccentCyan.copy(alpha = 0.5f)),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "VIDEO 2 PRESET",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = AppColors.AccentCyan
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Hologram & Flag VFX",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "Keyframes + Metallic Title",
-                                    fontSize = 11.sp,
-                                    color = AppColors.TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
                     }
                 }
 
-                // Recent Projects Header
+                // 3. Recent Projects Header
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Your Projects (${projects.size})",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AppColors.TextPrimary
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Recent Studio Projects",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = AppColors.TextPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = CircleShape,
+                                color = AppColors.SurfaceElevated
+                            ) {
+                                Text(
+                                    text = "${projects.size}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AppColors.PrimaryPurpleLight,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                         TextButton(
                             onClick = { viewModel.refreshHome() },
                             modifier = Modifier.testTag("refresh_projects_button")
@@ -428,7 +708,7 @@ fun HomeScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Refresh", fontSize = 12.sp)
+                            Text("Sync", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -449,7 +729,8 @@ fun HomeScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = AppColors.Surface),
-                            border = BorderStroke(1.dp, AppColors.SurfaceBorder)
+                            border = BorderStroke(1.dp, AppColors.SurfaceBorder),
+                            shape = RoundedCornerShape(18.dp)
                         ) {
                             Column(
                                 modifier = Modifier
@@ -470,9 +751,10 @@ fun HomeScreen(
                                     color = AppColors.TextPrimary
                                 )
                                 Text(
-                                    text = "Import a video from your device or open a showcase preset above.",
+                                    text = "Tap 'New Magic Project' or choose a Featured Template above.",
                                     fontSize = 12.sp,
-                                    color = AppColors.TextSecondary
+                                    color = AppColors.TextSecondary,
+                                    textAlign = TextAlign.Center
                                 )
                             }
                         }
@@ -507,9 +789,9 @@ fun HomeScreen(
                     .padding(horizontal = 20.dp, vertical = 12.dp)
             ) {
                 Text(
-                    text = "Create New Project",
+                    text = "Create New Magic Project",
                     fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     color = Color.White
                 )
                 Spacer(modifier = Modifier.height(14.dp))
@@ -517,7 +799,7 @@ fun HomeScreen(
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(14.dp))
                         .clickable {
                             showNewProjectSheet = false
                             videoPickerLauncher.launch(
@@ -526,7 +808,7 @@ fun HomeScreen(
                         }
                         .testTag("pick_video_gallery_item"),
                     color = AppColors.Surface,
-                    border = BorderStroke(1.dp, AppColors.SurfaceBorder)
+                    border = BorderStroke(1.dp, AppColors.PrimaryPurple.copy(alpha = 0.5f))
                 ) {
                     Row(
                         modifier = Modifier.padding(14.dp),
@@ -534,15 +816,15 @@ fun HomeScreen(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(42.dp)
+                                .size(44.dp)
                                 .clip(CircleShape)
-                                .background(AppColors.PrimaryPurple.copy(alpha = 0.2f)),
+                                .background(AppColors.MagicBrandGradient),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.VideoLibrary,
                                 contentDescription = "Pick Video",
-                                tint = AppColors.PrimaryPurpleLight
+                                tint = Color.White
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
@@ -572,7 +854,7 @@ fun HomeScreen(
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(14.dp))
                         .clickable {
                             showNewProjectSheet = false
                             viewModel.openDemoShowcase(1, onOpenEditor)
@@ -587,27 +869,27 @@ fun HomeScreen(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(42.dp)
+                                .size(44.dp)
                                 .clip(CircleShape)
-                                .background(AppColors.AccentCyan.copy(alpha = 0.2f)),
+                                .background(AppColors.AccentOrange.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PlayCircleOutline,
                                 contentDescription = "Demo Video",
-                                tint = AppColors.AccentCyan
+                                tint = AppColors.AccentOrange
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Open Bundled Sample Video Project",
+                                text = "Open 3-Tier Persian Kinetic Showcase",
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = "Real speech MP4 with bilingual Persian/English kinetic tracks",
+                                text = "Reference Video 1 style with word-level SFX & 3D orange headline",
                                 color = AppColors.TextSecondary,
                                 fontSize = 11.sp
                             )
@@ -729,7 +1011,7 @@ fun HomeScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = AppColors.PrimaryPurple)
                 ) {
                     Text(
-                        text = "Import & Open in Editor",
+                        text = "Import & Open in Magic Editor",
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
                     )
@@ -751,7 +1033,7 @@ fun HomeScreen(
                     .padding(horizontal = 20.dp, vertical = 12.dp)
             ) {
                 Text(
-                    text = "CaptionForge Settings & Capabilities",
+                    text = "MagicCap • Studio Capabilities",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
@@ -760,7 +1042,7 @@ fun HomeScreen(
 
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = AppColors.Surface,
                     border = BorderStroke(1.dp, AppColors.SurfaceBorder)
                 ) {
@@ -772,8 +1054,14 @@ fun HomeScreen(
                         )
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = AppColors.SurfaceBorder)
                         CapabilityStatusRow(
-                            label = "Multi-Script RTL Typography",
-                            value = "Ready (Vazirmatn, Noto Arabic, Nastaliq, Amiri)",
+                            label = "26 Multi-Script RTL & Latin Fonts",
+                            value = "Ready (FA, PS, UR, AR, EN + Custom .TTF)",
+                            isReady = true
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = AppColors.SurfaceBorder)
+                        CapabilityStatusRow(
+                            label = "60 Studio Sound Effects & Music",
+                            value = "Ready (23 Categories + 32-Bar Waveforms)",
                             isReady = true
                         )
                         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = AppColors.SurfaceBorder)
@@ -782,7 +1070,7 @@ fun HomeScreen(
                             value = if (backendConfig?.transcription == "faster-whisper") {
                                 "Ready on Backend"
                             } else {
-                                "Requires FastAPI Backend"
+                                "Connect FastAPI Server"
                             },
                             isReady = backendConfig?.transcription == "faster-whisper"
                         )
@@ -851,7 +1139,7 @@ fun HomeScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "CaptionForge runs locally on Android and connects to your Python FastAPI server for Faster-Whisper ASR, OpenCV tracking, and FFmpeg MP4 burning.",
+                        text = "MagicCap runs locally on Android and connects to your Python FastAPI server for Faster-Whisper ASR, OpenCV tracking, and FFmpeg MP4 burning.",
                         fontSize = 12.sp,
                         color = AppColors.TextSecondary
                     )
@@ -939,29 +1227,30 @@ fun HomeScreen(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(CircleShape)
-                        .background(AppColors.PrimaryPurple.copy(alpha = 0.2f)),
+                        .background(AppColors.MagicBrandGradient),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.WorkspacePremium,
                         contentDescription = null,
-                        tint = AppColors.PrimaryPurpleLight,
+                        tint = Color.White,
                         modifier = Modifier.size(30.dp)
                     )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "CaptionForge Studio Architecture",
+                    text = "MagicCap • Pro Studio Engine",
                     fontSize = 19.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = Color.White
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "• Native Jetpack Compose + Media3 ExoPlayer client\n" +
-                        "• Multi-track RTL subtitles (English, Persian/Dari, Pashto, Urdu, Arabic)\n" +
-                        "• Keyframe VFX overlays, Waving Flag, Hand Hologram & Metallic Reveal\n" +
-                        "• 11-category royalty-free SFX synthesizer & FastAPI FFmpeg integration",
+                    text = "• Interactive Magic Script Mode: Tap any word to seek, highlight, or attach SFX\n" +
+                        "• 3-Tier Persian/Dari, Pashto, Urdu, Arabic & English Kinetic Typography\n" +
+                        "• 26 Bundled Open-Source Fonts + Custom .TTF/.OTF Font Importer\n" +
+                        "• 60 Studio Sound Effects & Loops across 23 categories with 32-bar waveforms\n" +
+                        "• Subject-Occluded Depth Titles, Hand/Face Tracking & Dual MP4 Export",
                     fontSize = 13.sp,
                     color = AppColors.TextSecondary,
                     lineHeight = 20.sp
@@ -1042,6 +1331,61 @@ fun HomeScreen(
 }
 
 @Composable
+private fun QuickFeaturePill(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF141229).copy(alpha = 0.85f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Column {
+                Text(
+                    text = title,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color.White,
+                    maxLines = 1
+                )
+                Text(
+                    text = subtitle,
+                    fontSize = 9.sp,
+                    color = AppColors.TextSecondary,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun CapabilityStatusRow(
     label: String,
     value: String,
@@ -1091,7 +1435,7 @@ private fun ProjectRowCard(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .testTag("project_item_${project.id}"),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = AppColors.Surface),
         border = BorderStroke(1.dp, AppColors.SurfaceBorder)
     ) {
@@ -1103,17 +1447,17 @@ private fun ProjectRowCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(width = 50.dp, height = 62.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(width = 54.dp, height = 68.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(
                         Brush.linearGradient(
-                            listOf(Color(0xFF31236A), AppColors.PrimaryPurple)
+                            listOf(Color(0xFF3B28CC), AppColors.PrimaryPurple, Color(0xFFEC4899))
                         )
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.Movie,
+                    imageVector = Icons.Default.PlayArrow,
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(24.dp)
@@ -1121,26 +1465,27 @@ private fun ProjectRowCard(
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 3.dp)
+                        .padding(bottom = 4.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(Color.Black.copy(alpha = 0.7f))
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                        .background(Color.Black.copy(alpha = 0.75f))
+                        .padding(horizontal = 5.dp, vertical = 1.dp)
                 ) {
                     Text(
                         text = "${String.format(Locale.US, "%.1f", project.duration)}s",
                         fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = project.name,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     color = AppColors.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1148,10 +1493,42 @@ private fun ProjectRowCard(
                 Spacer(modifier = Modifier.height(4.dp))
                 val totalCues = project.tracks.sumOf { it.captions.size }
                 Text(
-                    text = "${project.aspectRatio} • ${project.resolution}p • ${project.tracks.size} tracks ($totalCues cues) • ${project.overlays.size} VFX",
+                    text = "${project.aspectRatio} • ${project.resolution}p • ${project.tracks.size} tracks ($totalCues cues) • ${project.audioClips.size} SFX",
                     fontSize = 11.sp,
                     color = AppColors.TextSecondary
                 )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    project.tracks.take(3).forEach { tr ->
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = AppColors.SurfaceElevated,
+                            border = BorderStroke(1.dp, AppColors.SurfaceBorder)
+                        ) {
+                            Text(
+                                text = tr.language.uppercase(),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AppColors.AccentCyan,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    if (project.overlays.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = AppColors.PrimaryPurple.copy(alpha = 0.16f)
+                        ) {
+                            Text(
+                                text = "${project.overlays.size} VFX Layers",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AppColors.PrimaryPurpleLight,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
             }
 
             Box {

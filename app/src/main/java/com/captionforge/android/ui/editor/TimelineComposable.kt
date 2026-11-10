@@ -1,5 +1,6 @@
 package com.captionforge.android.ui.editor
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,7 +14,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -26,16 +26,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,18 +44,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.captionforge.android.model.AudioClip
 import com.captionforge.android.model.CaptionCue
 import com.captionforge.android.model.GraphicOverlay
 import com.captionforge.android.model.Project
+import com.captionforge.android.model.SrtParser
 import com.captionforge.android.ui.theme.AppColors
+import com.captionforge.android.ui.theme.VazirmatnFontFamily
 import com.captionforge.android.ui.theme.parseHexColor
+import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.max
-import kotlin.math.sin
+import kotlin.math.roundToInt
 
 @Composable
 fun TimelineComposable(
@@ -80,308 +79,363 @@ fun TimelineComposable(
     onSplitVideoClip: () -> Unit,
     onCycleClipTransition: (String) -> Unit,
     onOpenTrackManager: () -> Unit,
+    onEditAudioClip: ((AudioClip) -> Unit)? = null,
+    selectedWordIndex: Int = 0,
+    onSelectWord: ((CaptionCue, Int) -> Unit)? = null,
+    onTrimCue: ((CaptionCue, Double, Double) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var dpPerSecond by remember { mutableFloatStateOf(76f) }
+    var dpPerSecond by remember { mutableFloatStateOf(96f) }
     val horizontalScroll = rememberScrollState()
     val verticalScroll = rememberScrollState()
+    val wordStripScroll = rememberScrollState()
     val density = LocalDensity.current
 
-    val totalDuration = max(2.0, project.duration)
-    val totalWidthDp = (totalDuration * dpPerSecond + 160.0).dp
+    val totalDuration = max(1.0, project.duration)
+    val timelineWidthDp = max(380f, (totalDuration * dpPerSecond).toFloat() + 120f).dp
+    val pxPerSecond = with(density) { dpPerSecond.dp.toPx() }
+    val hasGlobalSfx = project.effects.sfx != "None"
+
+    val activeTrack = project.tracks.getOrNull(activeTrackIndex) ?: project.tracks.firstOrNull()
+    val activeOrSelectedCue = activeTrack?.captions?.firstOrNull { it.id == selectedCueId }
+        ?: activeTrack?.captions?.firstOrNull { currentTime >= it.start && currentTime <= it.end }
+        ?: activeTrack?.captions?.firstOrNull()
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(AppColors.Surface)
+            .background(Color(0xFF08070E))
+            .testTag("timeline_container")
     ) {
-        // Top Timeline Header Bar (Track Tabs + Quick Add/Split + Zoom)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                project.tracks.forEachIndexed { idx, track ->
-                    val isSelected = idx == activeTrackIndex
-                    val trackColor = AppColors.TrackColors[idx % AppColors.TrackColors.size]
-                    Surface(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .clickable { onSelectTrack(idx) }
-                            .testTag("timeline_track_tab_$idx"),
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (isSelected) trackColor.copy(alpha = 0.22f) else Color.Transparent,
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isSelected) trackColor else AppColors.SurfaceBorder
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(trackColor)
-                            )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = track.name.ifBlank { "Track ${idx + 1}" },
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) Color.White else AppColors.TextSecondary
-                            )
-                            if (!track.visible) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    imageVector = Icons.Default.VisibilityOff,
-                                    contentDescription = "Hidden",
-                                    tint = AppColors.TextMuted,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                            }
-                            if (track.locked) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = "Locked",
-                                    tint = AppColors.AccentAmber,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Surface(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { onOpenTrackManager() }
-                        .testTag("manage_tracks_chip"),
-                    shape = RoundedCornerShape(16.dp),
-                    color = AppColors.SurfaceElevated
-                ) {
-                    Text(
-                        text = "+ Tracks",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = AppColors.PrimaryPurpleLight,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            // Add Caption Cue button
-            Surface(
-                modifier = Modifier
-                    .padding(horizontal = 4.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable { onAddCueAtPlayhead() }
-                    .testTag("add_cue_timeline_button"),
-                color = AppColors.PrimaryPurple.copy(alpha = 0.25f)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add Cue",
-                        tint = AppColors.PrimaryPurpleLight,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(2.dp))
-                    Text("Cue", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                }
-            }
-
-            // Split Video Clip button
-            IconButton(
-                onClick = onSplitVideoClip,
-                modifier = Modifier
-                    .size(28.dp)
-                    .testTag("split_clip_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ContentCut,
-                    contentDescription = "Split Clip at Playhead",
-                    tint = AppColors.TextSecondary,
-                    modifier = Modifier.size(15.dp)
-                )
-            }
-
-            // Zoom Out / In
-            IconButton(
-                onClick = { dpPerSecond = (dpPerSecond - 16f).coerceIn(40f, 220f) },
-                modifier = Modifier.size(26.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Remove,
-                    contentDescription = "Zoom Out",
-                    tint = AppColors.TextSecondary,
-                    modifier = Modifier.size(15.dp)
-                )
-            }
-            Text(
-                text = "${dpPerSecond.toInt()}px",
-                fontSize = 10.sp,
-                color = AppColors.TextMuted
-            )
-            IconButton(
-                onClick = { dpPerSecond = (dpPerSecond + 16f).coerceIn(40f, 220f) },
-                modifier = Modifier.size(26.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Zoom In",
-                    tint = AppColors.TextSecondary,
-                    modifier = Modifier.size(15.dp)
-                )
-            }
-        }
-
-        HorizontalDivider(color = AppColors.SurfaceBorder)
-
-        // Multi-Track Scrollable Scrubber Area
+        // Scrollable Time Ruler + Chunky Purple Pill Tracks (Exact Magic Editor Layout)
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .weight(1f)
                 .horizontalScroll(horizontalScroll)
         ) {
-            val pxPerSecond = with(density) { dpPerSecond.dp.toPx() }
-
             Box(
                 modifier = Modifier
-                    .width(totalWidthDp)
+                    .width(timelineWidthDp)
                     .fillMaxHeight()
                     .pointerInput(pxPerSecond, totalDuration) {
                         detectTapGestures { offset ->
-                            val sec = (offset.x / pxPerSecond).toDouble().coerceIn(0.0, totalDuration)
-                            onSeek(sec)
+                            val tappedSec = (offset.x / pxPerSecond).toDouble().coerceIn(0.0, totalDuration)
+                            onSeek(tappedSec)
                         }
                     }
                     .pointerInput(pxPerSecond, totalDuration) {
                         detectHorizontalDragGestures { change, _ ->
                             change.consume()
-                            val sec = (change.position.x / pxPerSecond).toDouble().coerceIn(0.0, totalDuration)
-                            onSeek(sec)
+                            val draggedSec = (change.position.x / pxPerSecond).toDouble().coerceIn(0.0, totalDuration)
+                            onSeek(draggedSec)
                         }
                     }
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .width(timelineWidthDp)
                         .verticalScroll(verticalScroll)
-                        .padding(bottom = 12.dp)
+                        .padding(bottom = 6.dp)
                 ) {
-                    // 1. Time Ruler
-                    TimeRulerRow(totalDuration = totalDuration, dpPerSecond = dpPerSecond)
-
-                    // 2. Video Clips Track Lane
-                    val clips = project.videoClips.ifEmpty {
-                        listOf(
-                            com.captionforge.android.model.VideoClipSegment(
-                                id = "vc_default",
-                                label = "Main Video",
-                                sourceUri = project.source,
-                                startInTimeline = project.trim.start,
-                                endInTimeline = project.trim.end,
-                                transition = "Cut"
-                            )
-                        )
-                    }
+                    // 1. Clean Timecode Ruler (00:00   .   .   00:01   .   .   00:02)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(28.dp)
-                            .padding(vertical = 2.dp)
-                            .background(Color.White.copy(alpha = 0.03f))
+                            .height(24.dp)
+                            .background(Color(0xFF08070E))
                     ) {
-                        clips.forEach { clip ->
-                            val leftDp = (clip.startInTimeline * dpPerSecond).dp
-                            val widthDp = max(28.0, clip.duration * dpPerSecond).dp
-                            Row(
+                        val totalSecs = ceil(totalDuration).toInt()
+                        for (sec in 0..totalSecs) {
+                            val xOffset = (sec * dpPerSecond).dp
+                            val mm = sec / 60
+                            val ss = sec % 60
+                            Text(
+                                text = String.format(Locale.US, "%02d:%02d", mm, ss),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF7C7A92),
                                 modifier = Modifier
-                                    .offset(x = leftDp)
-                                    .width(widthDp)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0xFF312E81).copy(alpha = 0.85f))
-                                    .border(1.dp, Color(0xFF6366F1), RoundedCornerShape(6.dp))
-                                    .clickable { onCycleClipTransition(clip.id) }
-                                    .padding(horizontal = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Movie,
-                                    contentDescription = null,
-                                    tint = Color(0xFFA5B4FC),
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "${clip.label} [${clip.transition}]",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                    .offset(x = xOffset + 2.dp, y = 3.dp)
+                            )
+                        }
+                        Canvas(modifier = Modifier.matchParentSize()) {
+                            val subSteps = totalSecs * 4
+                            for (i in 0..subSteps) {
+                                if (i % 4 != 0) {
+                                    val x = (i / 4f) * pxPerSecond
+                                    drawCircle(
+                                        color = Color(0xFF3E3B54),
+                                        radius = 1.5f,
+                                        center = Offset(x, size.height * 0.48f)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // 3. Graphic Overlays / VFX Lane (if any overlays exist)
-                    if (project.overlays.isNotEmpty()) {
+                    // 2. Subtitle Tracks (Chunky Rounded Indigo/Purple Pills like Magic Editor)
+                    val indexedTracks = project.tracks.mapIndexed { idx, tr -> idx to tr }.reversed()
+                    indexedTracks.forEach { (trackIdx, track) ->
+                        val isTrackSelected = trackIdx == activeTrackIndex
+                        if (project.tracks.size > 1) {
+                            Row(
+                                modifier = Modifier
+                                    .padding(start = 8.dp, top = 2.dp, bottom = 2.dp)
+                                    .clickable { onSelectTrack(trackIdx) },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(5.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isTrackSelected) Color(0xFF818CF8) else Color(0xFF64708D))
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "${track.style.preset} - ${track.name}",
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isTrackSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isTrackSelected) Color(0xFFD8B4FE) else Color(0xFF8E8CA6)
+                                )
+                            }
+                        }
+
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(28.dp)
+                                .height(44.dp)
                                 .padding(vertical = 2.dp)
-                                .background(Color.White.copy(alpha = 0.04f))
                         ) {
-                            project.overlays.forEach { ov ->
-                                val leftDp = (ov.start * dpPerSecond).dp
-                                val widthDp = max(28.0, ov.duration * dpPerSecond).dp
-                                val ovColor = parseHexColor(ov.color)
-                                val isSelected = ov.id == selectedOverlayId
+                            track.captions.forEach { cue ->
+                                val leftDp = (cue.start * dpPerSecond).dp
+                                val widthDp = max(48.0, (cue.end - cue.start) * dpPerSecond).dp
+                                val isSelected = cue.id == selectedCueId
+                                val isAtPlayhead = currentTime >= cue.start && currentTime <= cue.end
+                                val isHighlighted = isSelected || (isTrackSelected && isAtPlayhead)
+                                val cueHasSfx = hasGlobalSfx ||
+                                    cue.entranceSfx != "None" ||
+                                    cue.words.any { it.sfx != "None" }
 
-                                Row(
+                                Box(
                                     modifier = Modifier
                                         .offset(x = leftDp)
                                         .width(widthDp)
                                         .fillMaxHeight()
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(ovColor.copy(alpha = if (ov.visible) 0.72f else 0.25f))
-                                        .border(
-                                            width = if (isSelected) 2.dp else 1.dp,
-                                            color = if (isSelected) Color.White else ovColor,
-                                            shape = RoundedCornerShape(6.dp)
+                                        .padding(horizontal = 1.5.dp)
+                                        .clip(RoundedCornerShape(13.dp))
+                                        .background(
+                                            when {
+                                                isHighlighted -> Color(0xFF4F46E5)
+                                                isTrackSelected -> Color(0xFF28205C)
+                                                else -> Color(0xFF1E1942)
+                                            }
                                         )
-                                        .clickable { onSelectOverlay(ov) }
-                                        .padding(horizontal = 6.dp),
+                                        .border(
+                                            width = if (isHighlighted) 1.5.dp else 1.dp,
+                                            color = if (isHighlighted) Color(0xFFA5B4FC) else Color(0xFF3E347A),
+                                            shape = RoundedCornerShape(13.dp)
+                                        )
+                                        .clickable {
+                                            onSelectTrack(trackIdx)
+                                            if (isSelected) {
+                                                onEditCue(cue)
+                                            } else {
+                                                onSelectCue(cue)
+                                            }
+                                        }
+                                        .testTag("timeline_cue_${cue.id}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    // Interactive Left & Right White Trim Handles when Selected/Active
+                                    if (isHighlighted) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.CenterStart)
+                                                .width(12.dp)
+                                                .fillMaxHeight()
+                                                .background(Color(0xFF6366F1))
+                                                .pointerInput(cue.id, cue.start, cue.end, pxPerSecond) {
+                                                    detectHorizontalDragGestures { change, dragAmount ->
+                                                        change.consume()
+                                                        val deltaSec = (dragAmount / pxPerSecond).toDouble()
+                                                        val newStart = ((cue.start + deltaSec).coerceIn(0.0, cue.end - 0.2) * 100.0).roundToInt() / 100.0
+                                                        onTrimCue?.invoke(cue, newStart, cue.end)
+                                                    }
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(2.dp)
+                                                    .height(14.dp)
+                                                    .clip(RoundedCornerShape(1.dp))
+                                                    .background(Color.White)
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.CenterEnd)
+                                                .width(12.dp)
+                                                .fillMaxHeight()
+                                                .background(Color(0xFF6366F1))
+                                                .pointerInput(cue.id, cue.start, cue.end, pxPerSecond) {
+                                                    detectHorizontalDragGestures { change, dragAmount ->
+                                                        change.consume()
+                                                        val deltaSec = (dragAmount / pxPerSecond).toDouble()
+                                                        val newEnd = ((cue.end + deltaSec).coerceIn(cue.start + 0.2, totalDuration) * 100.0).roundToInt() / 100.0
+                                                        onTrimCue?.invoke(cue, cue.start, newEnd)
+                                                    }
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(2.dp)
+                                                    .height(14.dp)
+                                                    .clip(RoundedCornerShape(1.dp))
+                                                    .background(Color.White)
+                                            )
+                                        }
+                                    }
+
+                                    // Caption Text inside the Chunky Purple Pill
+                                    Row(
+                                        modifier = Modifier.padding(
+                                            horizontal = if (isHighlighted) 14.dp else 8.dp
+                                        ),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        if (cueHasSfx) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(16.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFF6D28D9)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.VolumeUp,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(10.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                        }
+                                        Text(
+                                            text = cue.text.replace("\n", " "),
+                                            fontFamily = VazirmatnFontFamily,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+
+                            // "+ Add" pill at end of track
+                            val lastEnd = track.captions.maxOfOrNull { it.end } ?: 0.0
+                            Surface(
+                                modifier = Modifier
+                                    .offset(x = ((lastEnd + 0.15) * dpPerSecond).dp)
+                                    .height(34.dp)
+                                    .align(Alignment.CenterStart)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        onSelectTrack(trackIdx)
+                                        onAddCueAtPlayhead()
+                                    }
+                                    .testTag("timeline_add_cue_btn"),
+                                color = Color(0xFF1A1636),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Layers,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(11.dp)
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Add Caption",
+                                        tint = Color(0xFFA5B4FC),
+                                        modifier = Modifier.size(14.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
                                     Text(
-                                        text = if (ov.keyframes.isNotEmpty()) "${ov.name} ◆${ov.keyframes.size}" else ov.name,
-                                        fontSize = 10.sp,
+                                        text = "Add",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFA5B4FC)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Compact Secondary Pill Strip for VFX Overlays & Audio Clips (when present)
+                    if (project.overlays.isNotEmpty() || project.audioClips.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(22.dp)
+                                .padding(top = 2.dp)
+                        ) {
+                            project.overlays.forEach { ov ->
+                                if (!ov.visible) return@forEach
+                                val leftDp = (ov.start * dpPerSecond).dp
+                                val widthDp = max(36.0, (ov.end - ov.start) * dpPerSecond).dp
+                                val isSel = ov.id == selectedOverlayId
+                                Box(
+                                    modifier = Modifier
+                                        .offset(x = leftDp)
+                                        .width(widthDp)
+                                        .height(18.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isSel) AppColors.AccentOrange else Color(0xFF3B1D5E))
+                                        .border(
+                                            1.dp,
+                                            if (isSel) Color.White else AppColors.PrimaryPurpleLight.copy(alpha = 0.5f),
+                                            RoundedCornerShape(6.dp)
+                                        )
+                                        .clickable { onSelectOverlay(ov) }
+                                        .padding(horizontal = 6.dp)
+                                        .testTag("timeline_overlay_${ov.id}"),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Text(
+                                        text = "✦ ${ov.name}",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            project.audioClips.forEach { clip ->
+                                val leftDp = (clip.start * dpPerSecond).dp
+                                val widthDp = max(36.0, clip.duration * dpPerSecond).dp
+                                Box(
+                                    modifier = Modifier
+                                        .offset(x = leftDp)
+                                        .width(widthDp)
+                                        .height(18.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color(0xFF065F46).copy(alpha = 0.85f))
+                                        .border(1.dp, AppColors.AccentGreen, RoundedCornerShape(6.dp))
+                                        .clickable { onEditAudioClip?.invoke(clip) }
+                                        .padding(horizontal = 6.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Text(
+                                        text = "♪ ${clip.name}",
+                                        fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White,
                                         maxLines = 1,
@@ -391,197 +445,166 @@ fun TimelineComposable(
                             }
                         }
                     }
-
-                    // 4. Subtitle Tracks Lanes
-                    project.tracks.forEachIndexed { trackIdx, track ->
-                        val isCurrentTrack = trackIdx == activeTrackIndex
-                        val trackColor = AppColors.TrackColors[trackIdx % AppColors.TrackColors.size]
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(34.dp)
-                                .padding(vertical = 2.dp)
-                                .background(
-                                    if (isCurrentTrack) AppColors.SurfaceElevated.copy(alpha = 0.7f)
-                                    else Color.Transparent
-                                )
-                        ) {
-                            track.captions.forEach { cue ->
-                                val isCueSelected = cue.id == selectedCueId
-                                val leftDp = (cue.start * dpPerSecond).dp
-                                val widthDp = max(24.0, cue.duration * dpPerSecond).dp
-
-                                Box(
-                                    modifier = Modifier
-                                        .offset(x = leftDp)
-                                        .width(widthDp)
-                                        .fillMaxHeight()
-                                        .clip(RoundedCornerShape(7.dp))
-                                        .background(
-                                            trackColor.copy(alpha = if (isCueSelected) 0.90f else 0.48f)
-                                        )
-                                        .border(
-                                            width = if (isCueSelected) 2.dp else 1.dp,
-                                            color = if (isCueSelected) Color.White else trackColor,
-                                            shape = RoundedCornerShape(7.dp)
-                                        )
-                                        .clickable {
-                                            onSelectTrack(trackIdx)
-                                            if (isCueSelected) {
-                                                onEditCue(cue)
-                                            } else {
-                                                onSelectCue(cue)
-                                            }
-                                        }
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        .testTag("timeline_cue_${cue.id}"),
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    Text(
-                                        text = cue.text,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isCueSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                                        color = Color.White,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // 5. Audio / SFX & Waveform Track Lane
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(30.dp)
-                            .padding(vertical = 2.dp)
-                            .background(AppColors.AccentGreen.copy(alpha = 0.06f))
-                    ) {
-                        // Procedural speech audio waveform background
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val barWidth = 3.dp.toPx()
-                            val gap = 3.dp.toPx()
-                            val step = barWidth + gap
-                            val count = (size.width / step).toInt()
-                            val centerY = size.height / 2f
-                            for (i in 0 until count) {
-                                val sec = (i * step) / pxPerSecond
-                                if (sec >= project.trim.start && sec <= project.trim.end) {
-                                    val amp = (0.25f + 0.65f * kotlin.math.abs(sin(i * 0.45f))).coerceIn(0.15f, 0.9f)
-                                    val halfH = (size.height * 0.42f) * amp
-                                    drawLine(
-                                        color = Color(0xFF10B981).copy(alpha = 0.35f),
-                                        start = Offset(i * step, centerY - halfH),
-                                        end = Offset(i * step, centerY + halfH),
-                                        strokeWidth = barWidth
-                                    )
-                                }
-                            }
-                        }
-
-                        project.audioClips.forEach { clip ->
-                            val leftDp = (clip.start * dpPerSecond).dp
-                            val widthDp = max(32.0, clip.duration * dpPerSecond).dp
-                            Row(
-                                modifier = Modifier
-                                    .offset(x = leftDp)
-                                    .width(widthDp)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color(0xFF059669).copy(alpha = 0.85f))
-                                    .border(1.dp, Color(0xFF34D399), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.VolumeUp,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = clip.name,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
                 }
 
-                // Dimmed non-active Trim Regions
-                if (project.trim.start > 0.01) {
-                    Box(
-                        modifier = Modifier
-                            .width((project.trim.start * dpPerSecond).dp)
-                            .fillMaxHeight()
-                            .background(Color.Black.copy(alpha = 0.55f))
-                    )
-                }
-                if (project.trim.end < totalDuration - 0.01) {
-                    Box(
-                        modifier = Modifier
-                            .offset(x = (project.trim.end * dpPerSecond).dp)
-                            .width(((totalDuration - project.trim.end) * dpPerSecond + 160.0).dp)
-                            .fillMaxHeight()
-                            .background(Color.Black.copy(alpha = 0.55f))
-                    )
-                }
-
-                // Red Playhead Indicator
-                val playheadXDp = (currentTime * dpPerSecond).dp
+                // 4. Crisp White Vertical Playhead Line (Exact Magic Editor Playhead)
+                val playheadX = (currentTime * dpPerSecond).dp
                 Box(
                     modifier = Modifier
-                        .offset(x = playheadXDp)
+                        .offset(x = playheadX - 1.dp)
                         .width(2.dp)
                         .fillMaxHeight()
-                        .background(AppColors.AccentCoral)
-                )
-                Box(
-                    modifier = Modifier
-                        .offset(x = (playheadXDp - 5.dp).coerceAtLeast(0.dp), y = 0.dp)
-                        .size(12.dp)
-                        .clip(CircleShape)
-                        .background(AppColors.AccentCoral)
+                        .background(Color.White)
                 )
             }
         }
-    }
-}
 
-@Composable
-private fun TimeRulerRow(
-    totalDuration: Double,
-    dpPerSecond: Float
-) {
-    val secondCount = ceil(totalDuration).toInt() + 2
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(22.dp)
-    ) {
-        for (s in 0 until secondCount) {
-            val xDp = (s * dpPerSecond).dp
-            Column(
-                modifier = Modifier.offset(x = xDp)
-            ) {
-                Box(
+        // 5. Interactive Word-Level Timeline Strip (Priority 3: Word-by-word selection, timing & styling strip)
+        if (activeOrSelectedCue != null) {
+            val words = remember(activeOrSelectedCue.id, activeOrSelectedCue.text, activeOrSelectedCue.words) {
+                if (activeOrSelectedCue.words.isNotEmpty()) {
+                    activeOrSelectedCue.words
+                } else {
+                    SrtParser.buildWordTimings(
+                        activeOrSelectedCue.text,
+                        activeOrSelectedCue.start,
+                        activeOrSelectedCue.end
+                    )
+                }
+            }
+            if (words.isNotEmpty()) {
+                Row(
                     modifier = Modifier
-                        .width(1.dp)
-                        .height(7.dp)
-                        .background(AppColors.TextMuted)
-                )
-                Text(
-                    text = "${s}s",
-                    fontSize = 9.sp,
-                    color = AppColors.TextMuted
-                )
+                        .fillMaxWidth()
+                        .background(Color(0xFF0E0C18))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .testTag("timeline_word_strip"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "WORDS",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF818CF8),
+                        modifier = Modifier.padding(end = 6.dp)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(wordStripScroll),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        words.forEachIndexed { wIdx, w ->
+                            val isWordSelected = activeOrSelectedCue.id == selectedCueId && wIdx == selectedWordIndex
+                            val isWordSpokenNow = currentTime >= w.start && currentTime <= w.end
+                            val hasCustomColor = !w.customColor.isNullOrBlank()
+                            val hasWordSfx = w.sfx != "None" && w.sfx.isNotBlank()
+                            val hasWordAnim = w.animation != "None" && w.animation.isNotBlank()
+
+                            Surface(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        onSelectCue(activeOrSelectedCue)
+                                        onSelectWord?.invoke(activeOrSelectedCue, wIdx)
+                                        onSeek(w.start)
+                                    }
+                                    .testTag("timeline_word_chip_$wIdx"),
+                                shape = RoundedCornerShape(8.dp),
+                                color = when {
+                                    isWordSelected -> Color(0xFF635BFF)
+                                    isWordSpokenNow -> Color(0xFF312E81)
+                                    else -> Color(0xFF181629)
+                                },
+                                border = BorderStroke(
+                                    width = 1.dp,
+                                    color = when {
+                                        isWordSelected -> Color.White
+                                        hasCustomColor -> parseHexColor(w.customColor!!)
+                                        isWordSpokenNow -> Color(0xFF818CF8)
+                                        else -> Color(0xFF2D2A45)
+                                    }
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    if (hasCustomColor) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(parseHexColor(w.customColor!!))
+                                        )
+                                    }
+                                    Text(
+                                        text = w.text,
+                                        fontFamily = VazirmatnFontFamily,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = String.format(Locale.US, "%.1fs", w.start),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 8.sp,
+                                        color = Color(0xFFCBD5E1)
+                                    )
+                                    if (hasWordAnim) {
+                                        Text(
+                                            text = "✦",
+                                            fontSize = 9.sp,
+                                            color = Color(0xFFFACC15)
+                                        )
+                                    }
+                                    if (hasWordSfx) {
+                                        Text(
+                                            text = "♪",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = AppColors.AccentGreen
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                onSelectCue(activeOrSelectedCue)
+                                onEditCue(activeOrSelectedCue)
+                            }
+                            .testTag("timeline_open_word_inspector_btn"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF231F3A),
+                        border = BorderStroke(1.dp, Color(0xFF4F46E5))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Word Inspector",
+                                tint = Color(0xFFA5B4FC),
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = "Word",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFA5B4FC)
+                            )
+                        }
+                    }
+                }
             }
         }
     }

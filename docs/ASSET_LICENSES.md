@@ -1,70 +1,77 @@
-# CaptionForge Asset Licenses & Provenance Registry
+# CaptionForge Asset Licenses & Attribution
 
-## 1. Overview
-This registry catalogs the intellectual property, copyright provenance, open-source licensing terms, and distribution rights for all typographic fonts, sound effects, animation templates, and external software dependencies utilized within CaptionForge.
-
----
-
-## 2. Typographic Fonts
-
-| Font Family | Script & Target Languages | License | Provenance / Upstream Repository | Commercial Use Terms |
-|---|---|---|---|---|
-| **Vazirmatn** | Arabic, Persian, Dari, Urdu, Kurdish | **SIL Open Font License 1.1 (OFL)** | [github.com/rastikerdar/vazirmatn](https://github.com/rastikerdar/vazirmatn) by Saber Rastikerdar | Permitted freely in commercial and open-source software; embedding and bundling permitted. |
-| **Noto Sans Arabic** | Arabic, Persian, Pashto, Urdu, Sindhi | **SIL Open Font License 1.1 (OFL)** | [fonts.google.com/noto/specimen/Noto+Sans+Arabic](https://fonts.google.com/noto/specimen/Noto+Sans+Arabic) by Google Fonts | Permitted freely in commercial and open-source software; embedding and bundling permitted. |
-| **Segoe UI** | Latin, Cyrillic, Greek | **Microsoft System Typography** | Standard Windows system font | Available via local system font rendering and DirectWrite. Fallback to sans-serif on non-Windows targets. |
-| **Tahoma / Arial** | Multilingual Latin & Arabic fallback | **Standard System Typography** | Cross-platform core font | Rendering via system font interfaces across desktop and mobile engines. |
+All font and audio assets bundled in the CaptionForge native Android application (`app/src/main/res/font/` and `app/src/main/assets/sfx/`) and the Python FastAPI compositor (`captionforge/data/fonts/` and `captionforge/static/sfx/`) are royalty-free and cleared for commercial and open-source redistribution.
 
 ---
 
-## 3. Sound Effects (SFX) Audio Engine: 100% Algorithmic Mathematical Synthesis
+## 1. Curated Multi-Script Font Library (26 Verified Fonts)
 
-All 9 sound effect presets in CaptionForge (`Pop`, `Whoosh`, `Impact`, `Click`, `Shimmer`, `Riser`, `Sweep`, `Glitch`, `Soft`) are **100% original algorithmic waveform syntheses** generated directly in-memory via Python's standard `math` and `wave` libraries:
-- **Zero Third-Party Samples:** No downloaded WAVs, proprietary stock audio libraries, or third-party SFX recordings are bundled in the repository or binary output.
-- **Synthesized Waveform Mathematics:**
-  - *Pop:* Pure exponential sine sweep $f(t) = 900 \cdot (300/900)^{t/D}$ with fast decay envelope.
-  - *Whoosh:* Modulated pseudo-random noise passed through an amplitude window.
-  - *Impact:* Sub-harmonic 75 Hz sinusoidal transient with exponential resonant dampening.
-  - *Click:* 1400 Hz acute impulse transient (18 ms duration).
-  - *Shimmer:* Three-part overtone triad ($f_1 = 1200\text{ Hz}, f_2 = 1850\text{ Hz}, f_3 = 2450\text{ Hz}$).
-  - *Riser:* Exponential frequency modulation from 180 Hz climbing to 1100 Hz.
-  - *Sweep:* Downward linear frequency modulation from 1350 Hz to 280 Hz.
-  - *Glitch:* Bit-crushed square wave periodic burst.
-  - *Ambient / Soft:* Dual-frequency pad ($f_1 = 260\text{ Hz}, f_2 = 390\text{ Hz}$) with smooth cosine attack/decay.
-- **Copyright & License:** **Public Domain / Creative Commons Zero (CC0)** & **MIT License**. Freely usable in commercial productions with zero royalties or attribution requirements.
+All 26 bundled `.ttf` typefaces are sourced from Google Fonts and distributed under the **SIL Open Font License (OFL) 1.1** or **Apache License 2.0**.
+
+### English / Latin Display, Sans, Serif & Monospace (12 Fonts)
+
+| Font Family | Resource File (`app/src/main/res/font/`) | Studio Category | Supported Weights | License |
+| :--- | :--- | :--- | :--- | :--- |
+| **Inter** | `inter.ttf` | Modern Sans-Serif | 400, 500, 600, 700, 800, 900 | SIL OFL 1.1 |
+| **Montserrat** | `montserrat.ttf` | Bold Cinematic | 400, 600, 700, 800, 900 | SIL OFL 1.1 |
+| **Poppins** | `poppins.ttf` | Social-Media Captions | 400, 600, 700, 800, 900 | SIL OFL 1.1 |
+| **Bebas Neue** | `bebas_neue.ttf` | Condensed Headlines | 400, 700 | SIL OFL 1.1 |
+| **Anton** | `anton.ttf` | Bold Cinematic | 400, 700, 900 | SIL OFL 1.1 |
+| **Oswald** | `oswald.ttf` | Condensed Headlines | 400, 500, 600, 700 | SIL OFL 1.1 |
+| **League Spartan** | `league_spartan.ttf` | Social-Media Captions | 400, 600, 700, 800, 900 | SIL OFL 1.1 |
+| **Archivo Black** | `archivo_black.ttf` | Bold Cinematic | 400, 700, 900 | SIL OFL 1.1 |
+| **Playfair Display** | `playfair_display.ttf` | Documentary | 400, 600, 700, 800 | SIL OFL 1.1 |
+| **Cinzel** | `cinzel.ttf` | Metallic Cinematic Titles | 400, 600, 700, 800, 900 | SIL OFL 1.1 |
+| **Orbitron** | `orbitron.ttf` | Neon/Glowing Titles | 400, 600, 700, 800, 900 | SIL OFL 1.1 |
+| **JetBrains Mono** | `jetbrains_mono.ttf` | Minimal Captions | 400, 500, 700, 800 | SIL OFL 1.1 |
+
+### Persian / Dari, Pashto, Urdu & Arabic Multi-Script RTL Fonts (14 Fonts)
+
+| Font Family | Resource File (`app/src/main/res/font/`) | Studio Category | Scripts Supported | License |
+| :--- | :--- | :--- | :--- | :--- |
+| **Vazirmatn** | `vazirmatn.ttf` | Modern Dari/Persian | `fa`, `ps`, `ar`, `ur`, `en` | SIL OFL 1.1 |
+| **Lalezar** | `lalezar.ttf` | Bold Cinematic | `fa`, `ps`, `ar`, `ur`, `en` | SIL OFL 1.1 |
+| **Noto Sans Arabic** | `noto_sans_arabic.ttf` | Modern Dari/Persian | `fa`, `ps`, `ar`, `ur` | SIL OFL 1.1 |
+| **Noto Naskh Arabic** | `noto_naskh_arabic.ttf` | Pashto Typography | `ps`, `fa`, `ar`, `ur` | SIL OFL 1.1 |
+| **Noto Nastaliq Urdu** | `noto_nastaliq_urdu.ttf` | Urdu Nastaliq | `ur`, `fa`, `ps`, `ar` | SIL OFL 1.1 |
+| **Amiri** | `amiri.ttf` | Elegant Persian | `fa`, `ar`, `ps`, `ur`, `en` | SIL OFL 1.1 |
+| **Cairo** | `cairo.ttf` | Arabic Calligraphy | `ar`, `fa`, `ps`, `ur`, `en` | SIL OFL 1.1 |
+| **Tajawal** | `tajawal.ttf` | Modern Dari/Persian | `ar`, `fa`, `ps`, `en` | SIL OFL 1.1 |
+| **IBM Plex Sans Arabic** | `ibm_plex_sans_arabic.ttf` | Documentary | `ar`, `fa`, `ps`, `ur`, `en` | SIL OFL 1.1 |
+| **Reem Kufi** | `reem_kufi.ttf` | Arabic Calligraphy | `ar`, `fa`, `ps`, `en` | SIL OFL 1.1 |
+| **Markazi Text** | `markazi_text.ttf` | Elegant Persian | `fa`, `ps`, `ar`, `ur`, `en` | SIL OFL 1.1 |
+| **Lateef** | `lateef.ttf` | Pashto Typography | `ps`, `ur`, `fa`, `ar`, `en` | SIL OFL 1.1 |
+| **Mirza** | `mirza.ttf` | Elegant Persian | `fa`, `ps`, `ur`, `ar`, `en` | SIL OFL 1.1 |
+| **Scheherazade New** | `scheherazade_new.ttf` | Pashto Typography | `ps`, `fa`, `ar`, `ur`, `en` | SIL OFL 1.1 |
 
 ---
 
-## 4. Cinematic Templates & Graphic Overlay Designs
+## 2. Studio Sound Effects & Background Music Library (60 Assets)
 
-The 8 preset styles inspired by Video 1 and Video 2 are original declarative vector and ASS tag compositions designed specifically for CaptionForge:
-1. `Orange Headline` (Vazirmatn Black + Orange `#FF6A00` + Pop entrance)
-2. `Orange/White Explainer` (Dual-tier hierarchical track layout)
-3. `Purple Flare` (Translucent diagonal light leak overlay)
-4. `Hand Hologram` (Cyan `#00F0FF` glowing text card with pulse animation)
-5. `Soft Persian Words` (Layer 0 background floating text with soft blur)
-6. `Flag with Subject` (Subject-anchored graphic badge)
-7. `Metallic Reveal` (Silver `#E2E8F0` metallic banner with steel outline)
-8. `End Accent Title` (Lower-third crimson call-to-action title)
+All 60 sound effects and background music loops are procedurally synthesized from pure mathematical DSP primitives (FM/subtractive oscillators, exponential pitch sweeps, harmonic chimes, resonant sub-bass envelopes, and filtered noise bursts) inside `SfxPlayerManager.kt` (Android runtime) and `captionforge/sfx_library.py` (Python FastAPI backend).
 
-**License:** **MIT License**. Unrestricted redistribution, modification, and commercial application.
-
----
-
-## 5. Software Libraries & Frameworks
-
-### A. Mobile Client (`captionforge_mobile`)
-- **Flutter SDK & Dart Engine:** BSD 3-Clause License (Google LLC).
-- **`video_player` (`^2.9.2`):** BSD 3-Clause License (Flutter Community / Google LLC).
-- **`http` (`^1.2.0`):** BSD 3-Clause License (Dart Team).
-- **`file_picker` (`^8.1.7`):** MIT License (Miguel Ruivo).
-- **`path` / `path_provider`:** BSD 3-Clause License (Dart Team).
-
-### B. Backend Engine (`captionforge`)
-- **FastAPI:** MIT License (Tiangolo / Sebastián Ramírez).
-- **Uvicorn:** BSD 3-Clause License (Encode OSS).
-- **Faster-Whisper:** MIT License (SYSTRAN).
-- **CTranslate2:** MIT License (SYSTRAN).
-- **OpenCV Python Headless:** Apache License 2.0 (OpenCV Foundation).
-- **PyAV (`av`):** BSD 2-Clause License (Mike Boers).
-- **Pydantic:** MIT License (Samuel Colvin).
-- **FFmpeg (External Tool):** LGPL v2.1+ / GPL v2+ (FFmpeg team). Packaged under standard dynamic executable invocation guidelines without static linking violations.
+- **License**: **CC0 1.0 Universal (Public Domain Dedication)** — original procedural DSP synthesis authored for CaptionForge.
+- **Categories Covered (23 Categories / 60 Distinct Presets)**:
+  1. `Soft Pop` (`pop_bubble.wav`, `pop_velvet_air.wav`, `pop_warm_drop.wav`)
+  2. `Punchy Pop` (`pop_crisp.wav`, `pop_punch_snap.wav`, `pop_kinetic_accent.wav`)
+  3. `UI Click` (`click_tactile.wav`, `click_shutter.wav`, `click_glass_tap.wav`)
+  4. `Text Click` (`text_typewriter_key.wav`, `text_mechanical_tick.wav`, `text_digital_blip.wav`)
+  5. `Fast Whoosh` (`whoosh_fast_air.wav`, `whoosh_razor_cut.wav`, `whoosh_snap_whip.wav`)
+  6. `Deep Whoosh` (`whoosh_deep_sub.wav`, `whoosh_dark_wind.wav`, `whoosh_heavy_pass.wav`)
+  7. `Cinematic Swoosh` (`whoosh_cinematic_whip.wav`, `swoosh_velvet_pan.wav`, `swoosh_silk_banner.wav`)
+  8. `Heavy Impact` (`impact_heavy_thump.wav`, `impact_sub_slam.wav`, `impact_anvil_strike.wav`)
+  9. `Bass Drop` (`bass_808_drop.wav`, `bass_deep_sub.wav`, `bass_reese_dive.wav`)
+  10. `Cinematic Boom` (`boom_trailer_quake.wav`, `boom_distant_thunder.wav`, `boom_epic_finale.wav`)
+  11. `Riser` (`riser_tension.wav`, `riser_hyper_riser.wav`, `riser_cyber_charge.wav`)
+  12. `Reverse Riser` (`reverse_crystal_suck.wav`, `reverse_air_vacuum.wav`)
+  13. `Glitch` (`glitch_digital_byte.wav`, `glitch_stutter_burst.wav`, `glitch_matrix_tear.wav`)
+  14. `Electric Pulse` (`pulse_neon_zap.wav`, `pulse_plasma_arc.wav`, `pulse_synth_throb.wav`)
+  15. `Magical Shimmer` (`shimmer_celestial.wav`, `shimmer_golden_dust.wav`)
+  16. `Sparkle` (`shimmer_sparkle.wav`, `sparkle_diamond_chime.wav`)
+  17. `Light Sweep` (`light_sweep_laser_sheen.wav`, `light_sweep_prism_sweep.wav`, `light_sweep_flare_flash.wav`)
+  18. `Transition Hit` (`transition_swoosh_hit.wav`, `transition_downbeat.wav`)
+  19. `Atmospheric Ambience` (`ambient_ethereal_drone.wav`, `ambient_warm_pad.wav`)
+  20. `Soft Transition` (`soft_breeze_fade.wav`, `soft_silk_turn.wav`)
+  21. `Metallic Impact` (`metal_sword_ring.wav`, `metal_titanium_clang.wav`)
+  22. `Logo Reveal` (`logo_cinematic_halo.wav`, `logo_quantum_bloom.wav`)
+  23. `Background Music` (`music_cyber_pulse_loop.wav`, `music_persian_cinematic_strings.wav`, `music_documentary_ambient_bed.wav`, `music_trap_reel_beat.wav`)
