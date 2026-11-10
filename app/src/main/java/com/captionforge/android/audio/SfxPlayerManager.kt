@@ -1115,7 +1115,11 @@ class SfxPlayerManager(private val context: Context) {
         val sr = 22050
         val trimStart = project.trim.start.coerceAtLeast(0.0)
         val trimEnd = project.trim.end.coerceAtLeast(trimStart + 0.5)
-        val durationSec = trimEnd - trimStart
+        val clipsTotalDur = project.videoClips
+            .map { (it.endInTimeline - it.startInTimeline) }
+            .filter { it >= 0.08 }
+            .sumOf { it.coerceAtLeast(0.2) }
+        val durationSec = if (clipsTotalDur >= 0.2) clipsTotalDur else (trimEnd - trimStart)
         val totalSamples = (durationSec * sr).toInt().coerceAtLeast(sr / 2)
         val mixBuffer = FloatArray(totalSamples)
 

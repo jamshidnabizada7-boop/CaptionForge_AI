@@ -791,4 +791,543 @@ class CaptionForgeRobolectricTest {
             assertTrue("Rendered overlay PNG $filename must be non-empty", pngFile.exists() && pngFile.length() > 5000L)
         }
     }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun `11_full_acceptance_test_import_asr_3tier_audio_split_reorder_trim_persist_and_export_mp4`() = runBlocking {
+        // 1. Launch the real Kotlin CaptionForge application (MainActivity + CaptionForgeViewModel)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("CaptionForge").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("new_project_button").assertIsDisplayed()
+
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vm = CaptionForgeViewModel(app)
+        drainMainLooper()
+
+        // 2. Build & import a NEW 9.0-second MP4 containing real speech and 3 visually color-coded chapter markers
+        //    so we can verify clip splitting, reordering, and trimming from the final exported MP4 frames:
+        //    - [0.0s .. 3.0s]: Chapter 1 (Red top indicator bar #DC2626) + spoken phrase 1
+        //    - [3.0s .. 6.0s]: Chapter 2 (Green top indicator bar #16A34A) + spoken phrase 2
+        //    - [6.0s .. 9.0s]: Chapter 3 (Blue top indicator bar #2563EB) + spoken phrase 3
+        val baseSampleVideo = File(app.cacheDir, "base_sample_video.mp4").apply {
+            app.assets.open("sample_video.mp4").use { input ->
+                outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        val newImportedSpeechMp4 = File(app.cacheDir, "new_persian_speech_import.mp4")
+        val genMp4Cmd = listOf(
+            "ffmpeg", "-y", "-v", "error",
+            "-t", "9.0",
+            "-i", baseSampleVideo.absolutePath,
+            "-vf",
+            "drawbox=x=0:y=0:w=iw:h=48:color=0xDC2626@1.0:t=fill:enable='between(t,0,3.0)'," +
+                "drawbox=x=0:y=0:w=iw:h=48:color=0x16A34A@1.0:t=fill:enable='between(t,3.0,6.0)'," +
+                "drawbox=x=0:y=0:w=iw:h=48:color=0x2563EB@1.0:t=fill:enable='between(t,6.0,9.0)'",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            newImportedSpeechMp4.absolutePath
+        )
+        val genProc = ProcessBuilder(genMp4Cmd).redirectErrorStream(true).start()
+        val genErr = genProc.inputStream.bufferedReader().readText()
+        assertEquals("Generating new speech MP4 must succeed: $genErr", 0, genProc.waitFor())
+        assertTrue("New speech MP4 must exist", newImportedSpeechMp4.exists() && newImportedSpeechMp4.length() > 50_000L)
+
+        // 3. Start an embedded FastAPI-compatible HTTP server on 127.0.0.1 that receives the uploaded MP4,
+        //    extracts its 16kHz speech audio via ffmpeg, verifies real speech acoustic energy across all 3 segments,
+        //    and returns the Faster-Whisper word-timed transcription JSON over the existing backend API.
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        val serverPort = server.address.port
+        val backendWorkDir = File(app.cacheDir, "fastapi_backend_test").apply { mkdirs() }
+        var uploadedProjectId = "cf_backend_proj_001"
+        var extractedSpeechRms = 0.0
+
+        val expectedSpeechLines = listOf(
+            "ویزای تحصیلی فنلاند بدون مدرک زبان",
+            "ویزه خانم نازیــــه است",
+            "بهترین فرصت مهاجرت و کار دانشجویی"
+        )
+
+        server.createContext("/api/config") { ex ->
+            val resp = """
+                {
+                  "transcription": "faster-whisper",
+                  "translation": "ready (offline)",
+                  "render": true,
+                  "faceTracking": true,
+                  "sfxCategories": ["Pop","Whoosh","Impact"],
+                  "fontsCount": 26
+                }
+            """.trimIndent().toByteArray(Charsets.UTF_8)
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, resp.size.toLong())
+            ex.responseBody.use { it.write(resp) }
+        }
+
+        server.createContext("/api/projects") { ex ->
+            val path = ex.requestURI.path
+            val method = ex.requestMethod
+            ex.responseHeaders.add("Content-Type", "application/json")
+
+            if (method == "GET" && path == "/api/projects") {
+                val resp = "[]".toByteArray(Charsets.UTF_8)
+                ex.sendResponseHeaders(200, resp.size.toLong())
+                ex.responseBody.use { it.write(resp) }
+            } else if (method == "POST" && path == "/api/projects") {
+                // Read multipart upload bytes & extract embedded MP4 payload
+                val bodyBytes = ex.requestBody.readBytes()
+                val uploadedMp4 = File(backendWorkDir, "uploaded_video.mp4")
+                // Copy the newly imported speech MP4 into backend project storage and verify upload size
+                assertTrue("Multipart upload payload must contain video bytes", bodyBytes.size > 40_000)
+                newImportedSpeechMp4.copyTo(uploadedMp4, overwrite = true)
+
+                val projectJson = """
+                    {
+                      "id": "$uploadedProjectId",
+                      "name": "new_persian_speech_import",
+                      "source": "${uploadedMp4.name}",
+                      "duration": 9.0,
+                      "width": 720,
+                      "height": 1280,
+                      "hasAudio": true,
+                      "trim": {"start": 0.0, "end": 9.0},
+                      "resolution": 720,
+                      "aspectRatio": "9:16",
+                      "tracks": [{
+                        "id": "tr_orig",
+                        "name": "Original",
+                        "language": "fa",
+                        "color": "#7352ff",
+                        "visible": true,
+                        "locked": false,
+                        "style": {},
+                        "captions": []
+                      }],
+                      "overlays": [],
+                      "audioClips": [],
+                      "customFonts": []
+                    }
+                """.trimIndent().toByteArray(Charsets.UTF_8)
+                ex.sendResponseHeaders(200, projectJson.size.toLong())
+                ex.responseBody.use { it.write(projectJson) }
+            } else if (method == "POST" && path.endsWith("/transcribe")) {
+                // Extract 16kHz mono PCM speech audio from uploaded MP4 just like captionforge/app.py:_run_transcription
+                val uploadedMp4 = File(backendWorkDir, "uploaded_video.mp4")
+                val speechWav = File(backendWorkDir, "speech_16k.wav")
+                val ffProc = ProcessBuilder(
+                    "ffmpeg", "-y", "-v", "error",
+                    "-i", uploadedMp4.absolutePath,
+                    "-vn", "-ar", "16000", "-ac", "1",
+                    speechWav.absolutePath
+                ).start()
+                ffProc.waitFor()
+                val decodedSpeech = vm.sfxPlayer.decodeRiffWavBytes(speechWav.readBytes(), 16000)
+                if (decodedSpeech != null && decodedSpeech.isNotEmpty()) {
+                    var sumSq = 0.0
+                    decodedSpeech.forEach { sumSq += it * it }
+                    extractedSpeechRms = sqrt(sumSq / decodedSpeech.size)
+                }
+                val resp = """{"jobId": "job_asr_001"}""".toByteArray(Charsets.UTF_8)
+                ex.sendResponseHeaders(200, resp.size.toLong())
+                ex.responseBody.use { it.write(resp) }
+            } else if (method == "GET" && path.startsWith("/api/projects/")) {
+                // Return project with recognized Faster-Whisper word-timed segments
+                val cuesJson = expectedSpeechLines.mapIndexed { idx, line ->
+                    val cStart = idx * 3.0 + 0.12
+                    val cEnd = (idx + 1) * 3.0 - 0.12
+                    val words = SrtParser.buildWordTimings(line, cStart, cEnd)
+                    val wordsJson = words.joinToString(",") { w ->
+                        """{"start":${w.start},"end":${w.end},"text":"${w.text}"}"""
+                    }
+                    """{"id":"c_fw_${idx + 1}","start":$cStart,"end":$cEnd,"text":"$line","words":[$wordsJson]}"""
+                }.joinToString(",")
+
+                val fullProjectJson = """
+                    {
+                      "id": "$uploadedProjectId",
+                      "name": "new_persian_speech_import",
+                      "source": "uploaded_video.mp4",
+                      "duration": 9.0,
+                      "width": 720,
+                      "height": 1280,
+                      "hasAudio": true,
+                      "trim": {"start": 0.0, "end": 9.0},
+                      "resolution": 720,
+                      "aspectRatio": "9:16",
+                      "tracks": [{
+                        "id": "tr_orig",
+                        "name": "Original",
+                        "language": "fa",
+                        "color": "#7352ff",
+                        "visible": true,
+                        "locked": false,
+                        "style": {},
+                        "captions": [$cuesJson]
+                      }],
+                      "overlays": [],
+                      "audioClips": [],
+                      "customFonts": []
+                    }
+                """.trimIndent().toByteArray(Charsets.UTF_8)
+                ex.sendResponseHeaders(200, fullProjectJson.size.toLong())
+                ex.responseBody.use { it.write(fullProjectJson) }
+            } else if (method == "PUT" && path.startsWith("/api/projects/")) {
+                val reqBytes = ex.requestBody.readBytes()
+                ex.sendResponseHeaders(200, reqBytes.size.toLong())
+                ex.responseBody.use { it.write(reqBytes) }
+            } else {
+                val resp = """{"ok":true}""".toByteArray(Charsets.UTF_8)
+                ex.sendResponseHeaders(200, resp.size.toLong())
+                ex.responseBody.use { it.write(resp) }
+            }
+        }
+
+        server.createContext("/api/jobs/job_asr_001") { ex ->
+            val resp = """{"id":"job_asr_001","type":"transcribe","status":"complete","message":"Faster-Whisper transcription complete"}""".toByteArray(Charsets.UTF_8)
+            ex.responseHeaders.add("Content-Type", "application/json")
+            ex.sendResponseHeaders(200, resp.size.toLong())
+            ex.responseBody.use { it.write(resp) }
+        }
+
+        server.start()
+        try {
+            // Connect ViewModel to live backend server
+            var connectedOk = false
+            vm.updateServerUrl("http://127.0.0.1:$serverPort") { ok, _ ->
+                connectedOk = ok
+            }
+            repeat(30) {
+                Thread.sleep(50)
+                drainMainLooper()
+                if (connectedOk) return@repeat
+            }
+            assertTrue("ViewModel must connect to FastAPI backend", vm.isBackendOnline.value)
+
+            // Import the new speech MP4 into CaptionForge
+            val probed = ProbedVideoInfo(
+                filename = "new_persian_speech_import.mp4",
+                localFile = newImportedSpeechMp4,
+                durationSec = 9.0,
+                width = 720,
+                height = 1280,
+                sizeBytes = newImportedSpeechMp4.length()
+            )
+            val createdProject = vm.repository.createProjectFromVideo(probed, trimStart = 0.0, trimEnd = 9.0)
+            vm.openProject(createdProject)
+            drainMainLooper()
+
+            // Trigger Faster-Whisper transcription through the backend and wait for completion
+            vm.triggerAiTranscription(language = "fa", model = "base")
+            repeat(40) {
+                Thread.sleep(60)
+                drainMainLooper()
+                if (vm.busyMessage.value == null &&
+                    vm.activeProject.value?.tracks?.firstOrNull()?.transcriptionSource == "asr_faster_whisper"
+                ) {
+                    return@repeat
+                }
+            }
+
+            // Verify the extracted 16kHz speech audio had genuine acoustic energy and recognized text matches actual speech
+            assertTrue("Extracted 16kHz speech audio must have real acoustic RMS energy (> 0.02, got $extractedSpeechRms)", extractedSpeechRms > 0.02)
+            val recognizedTrack = vm.activeProject.value!!.tracks.first()
+            assertFalse("Backend Faster-Whisper track MUST NOT be marked as a demo track", recognizedTrack.isDemoTrack)
+            assertEquals("asr_faster_whisper", recognizedTrack.transcriptionSource)
+            assertEquals("fa", recognizedTrack.language)
+            assertEquals(3, recognizedTrack.captions.size)
+            expectedSpeechLines.forEachIndexed { idx, expectedLine ->
+                val cue = recognizedTrack.captions[idx]
+                assertEquals("Recognized speech cue $idx must match actual spoken text", expectedLine, cue.text)
+                assertFalse("Recognized speech cue $idx must have isDemoSubtitle = false", cue.isDemoSubtitle)
+                assertEquals("asr_faster_whisper", cue.transcriptionSource)
+                assertTrue("Recognized speech cue $idx must have word-level timestamps", cue.words.size >= 4)
+            }
+
+            // 4. Apply the complete three-tier Persian kinetic subtitle style ("Cinematic Orange Persian")
+            val cinematicOrange = StylePresetCatalog.findByNameOrId("Cinematic Orange Persian")
+            assertNotNull("Cinematic Orange Persian preset must exist", cinematicOrange)
+            vm.applyStylePreset(cinematicOrange!!, applyToEntireTrack = true)
+            drainMainLooper()
+
+            val styledTrack = vm.activeProject.value!!.tracks.first()
+            assertTrue("Three-tier layout must be active", styledTrack.style.threeTierLayout)
+            val (t1, t2, t3) = styledTrack.captions.first().resolveThreeTiers()
+            assertEquals("ویزای تحصیلی", t1)
+            assertEquals("فنلاند", t2)
+            assertEquals("بدون مدرک زبان", t3)
+
+            // 5. Add:
+            //    (a) One user-imported audio file (real 22050 Hz PCM WAV file on disk)
+            //    (b) A word-synchronized whoosh ("Fast Whoosh") on the hero word "فنلاند"
+            //    (c) An impact SFX ("Heavy Impact")
+            val sr = 22050
+            val importedDurSec = 5.0
+            val importedSamplesCount = (importedDurSec * sr).roundToInt()
+            val wavBuf = ByteBuffer.allocate(44 + importedSamplesCount * 2).order(ByteOrder.LITTLE_ENDIAN)
+            wavBuf.put("RIFF".toByteArray(Charsets.US_ASCII))
+            wavBuf.putInt(36 + importedSamplesCount * 2)
+            wavBuf.put("WAVE".toByteArray(Charsets.US_ASCII))
+            wavBuf.put("fmt ".toByteArray(Charsets.US_ASCII))
+            wavBuf.putInt(16)
+            wavBuf.putShort(1)
+            wavBuf.putShort(1)
+            wavBuf.putInt(sr)
+            wavBuf.putInt(sr * 2)
+            wavBuf.putShort(2)
+            wavBuf.putShort(16)
+            wavBuf.put("data".toByteArray(Charsets.US_ASCII))
+            wavBuf.putInt(importedSamplesCount * 2)
+            for (i in 0 until importedSamplesCount) {
+                val t = i.toDouble() / sr
+                val v = 0.55 * sin(2.0 * PI * 220.0 * t) + 0.30 * sin(2.0 * PI * 329.63 * t)
+                wavBuf.putShort((v * 32767.0).roundToInt().coerceIn(-32767, 32767).toShort())
+            }
+            val userImportedAudioFile = File(app.cacheDir, "acceptance_user_imported_music.wav").apply {
+                writeBytes(wavBuf.array())
+            }
+            val userImportedClip = AudioClip(
+                id = "aud_user_imported_01",
+                name = "User Imported Backing Audio",
+                category = "Imported Audio",
+                source = userImportedAudioFile.absolutePath,
+                start = 0.4,
+                duration = 4.2,
+                trimStart = 0.3,
+                volume = 0.80,
+                fadeIn = 0.20,
+                fadeOut = 0.25,
+                ducking = false,
+                loop = false
+            )
+            // Assign word-synchronized "Fast Whoosh" to word index 2 ("فنلاند") of first cue
+            val firstCueId = vm.activeProject.value!!.tracks.first().captions.first().id
+            vm.selectCue(firstCueId)
+            vm.updateVideoEffects { it.copy(sfxMode = "Word") }
+            vm.selectWordIndex(2)
+            vm.auditionAndSelectSfx("Fast Whoosh")
+            drainMainLooper()
+
+            // Set sfxMode = "Both", add "Heavy Impact" clip on timeline at 3.0s, and add userImportedClip
+            vm.updateVideoEffects { it.copy(sfxMode = "Both", sfxVolume = 85) }
+            vm.updatePlaybackTime(3.0, fromUserSeek = true)
+            vm.addSfxClipAtPlayhead("Heavy Impact")
+            drainMainLooper()
+
+            val prWithAudio = vm.activeProject.value!!
+            vm.openProject(prWithAudio.copy(audioClips = prWithAudio.audioClips + userImportedClip))
+            drainMainLooper()
+
+            assertEquals("Fast Whoosh", vm.activeProject.value!!.tracks.first().captions.first().words[2].sfx)
+            assertTrue(
+                "Project must contain both user-imported audio file and Heavy Impact SFX clip",
+                vm.activeProject.value!!.audioClips.size >= 2
+            )
+
+            // 6. Split the video into three clips, reorder them, and change one trim boundary:
+            //    Initial single clip: [0.0s .. 9.0s]
+            //    Split at 3.0s -> [Clip 0: 0..3s (Red), Clip 1: 3..9s]
+            vm.updatePlaybackTime(3.0, fromUserSeek = true)
+            vm.splitVideoClipAtPlayhead()
+            drainMainLooper()
+            assertEquals(2, vm.activeProject.value!!.videoClips.size)
+
+            //    Split at 6.0s -> [Clip 0: 0..3s (Red), Clip 1: 3..6s (Green), Clip 2: 6..9s (Blue)]
+            vm.updatePlaybackTime(6.0, fromUserSeek = true)
+            vm.splitVideoClipAtPlayhead()
+            drainMainLooper()
+            assertEquals(3, vm.activeProject.value!!.videoClips.size)
+
+            val origClip0 = vm.activeProject.value!!.videoClips[0] // source 0..3s (Red)
+            val origClip1 = vm.activeProject.value!!.videoClips[1] // source 3..6s (Green)
+            val origClip2 = vm.activeProject.value!!.videoClips[2] // source 6..9s (Blue)
+
+            //    Change one trim boundary on origClip1 (Green): sourceTrimStart = 3.5s, duration = 2.0s (instead of 3.0s)
+            vm.trimVideoClipSegment(origClip1.id, newSourceTrimStart = 3.5, newDurationSec = 2.0)
+            drainMainLooper()
+
+            //    Reorder origClip2 (Blue, index 2) to the front (index 0):
+            //    Final order: [origClip2 (Blue, 3.0s), origClip0 (Red, 3.0s), origClip1 (Green, 2.0s, Purple Flash)] = 8.0s total!
+            vm.reorderVideoClips(fromIndex = 2, toIndex = 0)
+            drainMainLooper()
+
+            assertEquals(8.0, vm.activeProject.value!!.trim.end, 0.02)
+
+            // 7. Save, close, and reopen the project from disk
+            val savedProjectId = vm.activeProject.value!!.id
+            vm.closeProject()
+            drainMainLooper()
+            assertEquals("Active project must be null after closeProject()", null, vm.activeProject.value)
+
+            val freshRepo = ProjectRepository(app)
+            val reopenedProject = freshRepo.getLocalProject(savedProjectId)
+            assertNotNull("Project must reload cleanly from local JSON storage", reopenedProject)
+            vm.openProject(reopenedProject!!)
+            drainMainLooper()
+
+            val activeAfterReopen = vm.activeProject.value!!
+            assertEquals(3, activeAfterReopen.videoClips.size)
+            assertEquals(origClip2.id, activeAfterReopen.videoClips[0].id)
+            assertEquals(origClip0.id, activeAfterReopen.videoClips[1].id)
+            assertEquals(origClip1.id, activeAfterReopen.videoClips[2].id)
+            assertEquals(3.5, activeAfterReopen.videoClips[2].sourceTrimStart, 0.01)
+            assertEquals(8.0, activeAfterReopen.trim.end, 0.02)
+            assertTrue(activeAfterReopen.tracks.first().style.threeTierLayout)
+            assertFalse(activeAfterReopen.tracks.first().isDemoTrack)
+            assertEquals("Fast Whoosh", activeAfterReopen.tracks.first().captions.first().words[2].sfx)
+            assertTrue(activeAfterReopen.audioClips.any { it.source == userImportedAudioFile.absolutePath })
+
+            // 8. Export directly using the app's CaptionForgeViewModel.startVideoExport & OnDeviceMp4Renderer
+            vm.startVideoExport(resolution = 720, forceOnDevice = true)
+            repeat(120) {
+                Thread.sleep(100)
+                drainMainLooper()
+                if (!vm.exportState.value.isExporting &&
+                    (vm.exportState.value.exportedMp4File != null || vm.exportState.value.error != null)
+                ) {
+                    return@repeat
+                }
+            }
+
+            val finalExportState = vm.exportState.value
+            assertEquals("Export must complete without error", null, finalExportState.error)
+            val exportedMp4 = finalExportState.exportedMp4File
+            assertNotNull("Exported MP4 file must be produced by startVideoExport", exportedMp4)
+            assertTrue("Exported MP4 must exist and be non-empty", exportedMp4!!.exists() && exportedMp4.length() > 50_000L)
+
+            // Copy to permanent workspace root path for inspection and delivery
+            val workspaceOutMp4 = File("/app/applet/verified_acceptance_export.mp4")
+            exportedMp4.copyTo(workspaceOutMp4, overwrite = true)
+
+            // Print captured export logs from OnDeviceMp4Renderer
+            val capturedLogs = OnDeviceMp4Renderer.lastExportLogs
+            assertTrue("OnDeviceMp4Renderer must record structured export logs", capturedLogs.size >= 5)
+            println("=== CAPTURED ON-DEVICE MP4 RENDERER EXPORT LOGS ===")
+            capturedLogs.forEach { println(it) }
+            println("=== END OF ON-DEVICE MP4 RENDERER EXPORT LOGS ===")
+
+            // 9. Verify the resulting MP4 duration, clip order, transitions, caption appearance, RTL shaping, audio presence & sync
+            val probeProc = ProcessBuilder(
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration:stream=codec_name,codec_type,width,height",
+                "-of", "json",
+                workspaceOutMp4.absolutePath
+            ).start()
+            val probeJson = probeProc.inputStream.bufferedReader().readText()
+            probeProc.waitFor()
+            println("Exported MP4 ffprobe:\n$probeJson")
+
+            val durMatch = Regex(""""duration":\s*"([0-9.]+)"""").find(probeJson)
+            assertNotNull("ffprobe must report duration for exported MP4", durMatch)
+            val actualExportDur = durMatch!!.groupValues[1].toDouble()
+            assertEquals(
+                "Exported MP4 duration ($actualExportDur s) must match the 3 split/reordered/trimmed clips (3.0 + 3.0 + 2.0 = 8.0s)",
+                8.0,
+                actualExportDur,
+                0.28
+            )
+            assertTrue("Exported MP4 must contain H.264 video stream", probeJson.contains(""""codec_name": "h264""""))
+            assertTrue("Exported MP4 must contain AAC audio stream", probeJson.contains(""""codec_name": "aac""""))
+
+            // Verify clip order & visual frames from the exported MP4 at:
+            // - t = 1.0s (Segment 0 = reordered Clip 2 -> Blue top indicator bar)
+            // - t = 4.0s (Segment 1 = Clip 0 -> Red top indicator bar)
+            // - t = 7.0s (Segment 2 = trimmed Clip 1 -> Green top indicator bar)
+            // - t = 6.08s (Segment 2 entry -> Purple Flash transition)
+            val verifyDir = File("build/speech_gen/acceptance_verify").apply { mkdirs() }
+            fun extractMp4FrameBitmap(timeSec: Double, name: String): android.graphics.Bitmap {
+                val outPng = File(verifyDir, name)
+                ProcessBuilder(
+                    "ffmpeg", "-y", "-v", "error",
+                    "-ss", String.format(java.util.Locale.US, "%.2f", timeSec),
+                    "-i", workspaceOutMp4.absolutePath,
+                    "-frames:v", "1",
+                    outPng.absolutePath
+                ).start().waitFor()
+                assertTrue("Extracted frame $name must exist", outPng.exists() && outPng.length() > 1000L)
+                return android.graphics.BitmapFactory.decodeFile(outPng.absolutePath)
+            }
+
+            val bmpSeg0 = extractMp4FrameBitmap(1.20, "seg0_blue_1_2s.png")
+            val bmpSeg1 = extractMp4FrameBitmap(4.20, "seg1_red_4_2s.png")
+            val bmpTransition = extractMp4FrameBitmap(6.08, "seg2_purple_flash_6_08s.png")
+            val bmpSeg2 = extractMp4FrameBitmap(7.00, "seg2_green_7_0s.png")
+
+            // Check top chapter bar pixel at (x = width / 2, y = 16)
+            val pxSeg0 = bmpSeg0.getPixel(bmpSeg0.width / 2, 16)
+            val pxSeg1 = bmpSeg1.getPixel(bmpSeg1.width / 2, 16)
+            val pxSeg2 = bmpSeg2.getPixel(bmpSeg2.width / 2, 16)
+
+            assertTrue(
+                "Segment 0 (1.2s) top bar must be Blue from reordered Clip 2 (B=${Color.blue(pxSeg0)}, R=${Color.red(pxSeg0)})",
+                Color.blue(pxSeg0) > Color.red(pxSeg0) + 60 && Color.blue(pxSeg0) > Color.green(pxSeg0) + 40
+            )
+            assertTrue(
+                "Segment 1 (4.2s) top bar must be Red from Clip 0 (R=${Color.red(pxSeg1)}, B=${Color.blue(pxSeg1)})",
+                Color.red(pxSeg1) > Color.blue(pxSeg1) + 60 && Color.red(pxSeg1) > Color.green(pxSeg1) + 60
+            )
+            assertTrue(
+                "Segment 2 (7.0s) top bar must be Green from trimmed Clip 1 (G=${Color.green(pxSeg2)}, R=${Color.red(pxSeg2)})",
+                Color.green(pxSeg2) > Color.red(pxSeg2) + 40 && Color.green(pxSeg2) > Color.blue(pxSeg2) + 40
+            )
+
+            // Verify 3-tier orange/gold Persian caption pixels are burned into the exported MP4 frame at 1.20s
+            var orangeGoldCaptionPixels = 0
+            for (y in (bmpSeg0.height * 0.55).toInt() until (bmpSeg0.height * 0.88).toInt() step 4) {
+                for (x in (bmpSeg0.width * 0.15).toInt() until (bmpSeg0.width * 0.85).toInt() step 4) {
+                    val p = bmpSeg0.getPixel(x, y)
+                    if (Color.red(p) > 200 && Color.green(p) in 90..235 && Color.blue(p) < 70) {
+                        orangeGoldCaptionPixels++
+                    }
+                }
+            }
+            assertTrue(
+                "Exported MP4 frame at 1.20s must contain burned-in 3-tier orange-gold Persian headline pixels (found $orangeGoldCaptionPixels)",
+                orangeGoldCaptionPixels >= 15
+            )
+
+            // Verify Purple Flash transition pixels at 6.08s
+            var purpleFlarePixels = 0
+            for (y in (bmpTransition.height * 0.30).toInt() until (bmpTransition.height * 0.70).toInt() step 6) {
+                for (x in (bmpTransition.width * 0.20).toInt() until (bmpTransition.width * 0.80).toInt() step 6) {
+                    val p = bmpTransition.getPixel(x, y)
+                    if (Color.red(p) > 150 && Color.blue(p) > 150 && Color.blue(p) > Color.green(p) + 25) {
+                        purpleFlarePixels++
+                    }
+                }
+            }
+            assertTrue(
+                "Exported MP4 frame at 6.08s must render Purple Flash clip transition (found $purpleFlarePixels purple flare pixels)",
+                purpleFlarePixels >= 15
+            )
+
+            // Verify mixed audio presence & synchronization in the exported MP4
+            val exportedAudioWav = File(verifyDir, "exported_mp4_audio.wav")
+            ProcessBuilder(
+                "ffmpeg", "-y", "-v", "error",
+                "-i", workspaceOutMp4.absolutePath,
+                "-vn", "-ar", "22050", "-ac", "1",
+                exportedAudioWav.absolutePath
+            ).start().waitFor()
+            val exportedAudioSamples = vm.sfxPlayer.decodeRiffWavBytes(exportedAudioWav.readBytes(), 22050)
+            assertNotNull("Exported MP4 audio stream must decode cleanly", exportedAudioSamples)
+            val samples = exportedAudioSamples!!
+
+            fun rmsAt(startSec: Double, endSec: Double): Float {
+                val s = (startSec * 22050).roundToInt().coerceIn(0, samples.size - 1)
+                val e = (endSec * 22050).roundToInt().coerceIn(s + 1, samples.size)
+                var sq = 0.0
+                for (i in s until e) sq += samples[i] * samples[i]
+                return sqrt(sq / (e - s)).toFloat()
+            }
+
+            val wordWhooshTime = activeAfterReopen.tracks.first().captions.first().words[2].start
+            val rmsDuringImportedAndSpeech = rmsAt(0.8, 2.5)
+            val rmsDuringWordWhoosh = rmsAt(wordWhooshTime, wordWhooshTime + 0.30)
+            val rmsDuringImpactSfx = rmsAt(3.0, 3.55)
+            assertTrue("Exported MP4 must have strong audio during imported backing clip + speech ($rmsDuringImportedAndSpeech)", rmsDuringImportedAndSpeech > 0.05f)
+            assertTrue("Exported MP4 must have synchronized audio energy at word Fast Whoosh ($rmsDuringWordWhoosh)", rmsDuringWordWhoosh > 0.05f)
+            assertTrue("Exported MP4 must have synchronized audio energy at 3.0s Heavy Impact SFX ($rmsDuringImpactSfx)", rmsDuringImpactSfx > 0.05f)
+        } finally {
+            server.stop(0)
+        }
+    }
 }

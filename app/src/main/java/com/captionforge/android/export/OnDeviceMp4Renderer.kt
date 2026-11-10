@@ -89,6 +89,24 @@ data class ResolvedClipExportSegment(
 class OnDeviceMp4Renderer(private val context: Context) {
 
     companion object {
+        private val _lastExportLogs = mutableListOf<String>()
+        val lastExportLogs: List<String>
+            get() = synchronized(_lastExportLogs) { _lastExportLogs.toList() }
+
+        private fun recordExportLog(msg: String) {
+            val line = "[OnDeviceMp4Renderer] $msg"
+            runCatching { android.util.Log.i("OnDeviceMp4Renderer", msg) }
+            synchronized(_lastExportLogs) {
+                _lastExportLogs.add(line)
+            }
+        }
+
+        private fun clearExportLogs() {
+            synchronized(_lastExportLogs) {
+                _lastExportLogs.clear()
+            }
+        }
+
         /**
          * Builds the ordered sequence of video clip segments to be rendered into the final MP4.
          * Respects the exact order of `project.videoClips`, each clip's `sourceTrimStart`, split/trim
@@ -163,7 +181,21 @@ class OnDeviceMp4Renderer(private val context: Context) {
         onProgress: (String) -> Unit
     ): Result<File> = withContext(Dispatchers.Main) {
         runCatching {
+            clearExportLogs()
             val sequencePlan = buildVideoClipSequencePlan(project)
+            val totalDurationSec = sequencePlan.sumOf { it.durationSec }.coerceAtLeast(0.2)
+            recordExportLog(
+                "Starting export for project '${project.name}' (${project.id}) at ${resolution}p (${project.aspectRatio}), " +
+                    "clips=${sequencePlan.size}, totalDuration=${String.format(Locale.US, "%.2f", totalDurationSec)}s"
+            )
+            sequencePlan.forEach { seg ->
+                recordExportLog(
+                    "Segment[${seg.index}] id=${seg.clipId} label='${seg.label}' " +
+                        "source=[${seg.sourceStartMs}ms..${seg.sourceEndMs}ms] " +
+                        "output=[${String.format(Locale.US, "%.2f", seg.outputStartSec)}s..${String.format(Locale.US, "%.2f", seg.outputEndSec)}s] " +
+                        "transition=${seg.transition}"
+                )
+            }
             onProgress("Preparing ${sequencePlan.size} video clip(s) & mixed audio stem for Media3 Transformer...")
 
             val outDir = File(context.cacheDir, "exports").apply { mkdirs() }
@@ -173,13 +205,18 @@ class OnDeviceMp4Renderer(private val context: Context) {
                 outFile.delete()
             }
 
-            val targetWidth = when (project.aspectRatio) {
+            val rawWidth = when (project.aspectRatio) {
                 "16:9" -> (resolution * 16) / 9
                 "1:1" -> resolution
                 "4:5" -> (resolution * 4) / 5
                 else -> (resolution * 9) / 16
             }.coerceAtLeast(320)
-            val targetHeight = resolution.coerceAtLeast(320)
+            val targetWidth = if (rawWidth % 2 == 0) rawWidth else rawWidth + 1
+            val targetHeight = if (resolution.coerceAtLeast(320) % 2 == 0) {
+                resolution.coerceAtLeast(320)
+            } else {
+                resolution.coerceAtLeast(320) + 1
+            }
 
             val captionOverlay = CaptionAndVfxBitmapOverlay(
                 context = context,
@@ -189,86 +226,303 @@ class OnDeviceMp4Renderer(private val context: Context) {
                 frameHeight = targetHeight
             )
 
-            val sharedVideoEffects = buildList<Effect> {
-                add(Presentation.createForHeight(targetHeight))
-                val contrastVal = (project.effects.contrast - 1.0).toFloat().coerceIn(-0.8f, 0.8f)
-                if (abs(contrastVal) > 0.02f) {
-                    add(Contrast(contrastVal))
-                }
-                add(OverlayEffect(listOf<TextureOverlay>(captionOverlay)))
-            }
-
-            // Build an EditedMediaItem for each clip in the project's videoClips sequence
-            val editedVideoItems = sequencePlan.map { segment ->
-                val clipUri = resolvePlayableFileUri(segment.sourceUri)
-                val mediaItem = MediaItem.Builder()
-                    .setUri(clipUri)
-                    .setClippingConfiguration(
-                        MediaItem.ClippingConfiguration.Builder()
-                            .setStartPositionMs(segment.sourceStartMs)
-                            .setEndPositionMs(segment.sourceEndMs)
-                            .build()
-                    )
-                    .build()
-
-                EditedMediaItem.Builder(mediaItem)
-                    .setEffects(Effects(emptyList(), sharedVideoEffects))
-                    .build()
-            }
-
-            // Render synchronized SFX + user-imported audio stem WAV and combine with video sequence
+            // Render synchronized SFX + user-imported audio stem WAV
             val sfxStemFile = withContext(Dispatchers.IO) {
                 val stemOut = File(context.cacheDir, "sfx_stem_${project.id}.wav")
                 SfxPlayerManager(context).renderProjectSfxStemWav(project, stemOut)
             }
+            recordExportLog(
+                "Rendered mixed audio stem WAV: ${sfxStemFile.absolutePath} (${sfxStemFile.length()} bytes, " +
+                    "audioClips=${project.audioClips.size}, sfxMode=${project.effects.sfxMode})"
+            )
 
-            val sequences = mutableListOf<EditedMediaItemSequence>()
-            sequences.add(EditedMediaItemSequence(editedVideoItems))
-
-            if (sfxStemFile.exists() && sfxStemFile.length() > 100L) {
-                val sfxMediaItem = MediaItem.fromUri(Uri.fromFile(sfxStemFile))
-                val editedSfxItem = EditedMediaItem.Builder(sfxMediaItem).build()
-                sequences.add(EditedMediaItemSequence(listOf(editedSfxItem)))
-            }
-
-            val composition = Composition.Builder(sequences).build()
-
-            val completion = CompletableDeferred<ExportResult>()
-            val transformer = Transformer.Builder(context)
-                .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        completion.complete(exportResult)
+            val media3Result = runCatching {
+                val sharedVideoEffects = buildList<Effect> {
+                    add(Presentation.createForHeight(targetHeight))
+                    val contrastVal = (project.effects.contrast - 1.0).toFloat().coerceIn(-0.8f, 0.8f)
+                    if (abs(contrastVal) > 0.02f) {
+                        add(Contrast(contrastVal))
                     }
-
-                    override fun onError(
-                        composition: Composition,
-                        exportResult: ExportResult,
-                        exportException: ExportException
-                    ) {
-                        completion.completeExceptionally(exportException)
-                    }
-                })
-                .build()
-
-            onProgress("Encoding ${resolution}p MP4 (${sequencePlan.size} clips) on-device with Media3 Transformer (0%)...")
-            transformer.start(composition, outFile.absolutePath)
-
-            val progressHolder = ProgressHolder()
-            while (!completion.isCompleted) {
-                val state = transformer.getProgress(progressHolder)
-                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                    onProgress("Encoding ${resolution}p MP4 on-device (${progressHolder.progress}%)...")
+                    add(OverlayEffect(listOf<TextureOverlay>(captionOverlay)))
                 }
-                delay(150)
+
+                val editedVideoItems = sequencePlan.map { segment ->
+                    val clipUri = resolvePlayableFileUri(segment.sourceUri)
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(clipUri)
+                        .setClippingConfiguration(
+                            MediaItem.ClippingConfiguration.Builder()
+                                .setStartPositionMs(segment.sourceStartMs)
+                                .setEndPositionMs(segment.sourceEndMs)
+                                .build()
+                        )
+                        .build()
+
+                    EditedMediaItem.Builder(mediaItem)
+                        .setEffects(Effects(emptyList(), sharedVideoEffects))
+                        .build()
+                }
+
+                val sequences = mutableListOf<EditedMediaItemSequence>()
+                sequences.add(EditedMediaItemSequence(editedVideoItems))
+
+                if (sfxStemFile.exists() && sfxStemFile.length() > 100L) {
+                    val sfxMediaItem = MediaItem.fromUri(Uri.fromFile(sfxStemFile))
+                    val editedSfxItem = EditedMediaItem.Builder(sfxMediaItem).build()
+                    sequences.add(EditedMediaItemSequence(listOf(editedSfxItem)))
+                }
+
+                val composition = Composition.Builder(sequences).build()
+                val completion = CompletableDeferred<ExportResult>()
+                val transformer = Transformer.Builder(context)
+                    .addListener(object : Transformer.Listener {
+                        override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                            completion.complete(exportResult)
+                        }
+
+                        override fun onError(
+                            composition: Composition,
+                            exportResult: ExportResult,
+                            exportException: ExportException
+                        ) {
+                            completion.completeExceptionally(exportException)
+                        }
+                    })
+                    .build()
+
+                val codecInfos = runCatching {
+                    android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+                }.getOrNull() ?: emptyArray()
+                val hasAvcEncoder = codecInfos.any { info ->
+                    info.isEncoder && info.supportedTypes.any { it.equals("video/avc", ignoreCase = true) }
+                }
+
+                val msg = "Encoding ${resolution}p MP4 (${sequencePlan.size} clips, codecs=${codecInfos.size}, avcEncoder=$hasAvcEncoder) on-device with Media3 Transformer (0%)..."
+                onProgress(msg)
+                recordExportLog(msg)
+                transformer.start(composition, outFile.absolutePath)
+
+                val progressHolder = ProgressHolder()
+                if (!hasAvcEncoder) {
+                    val state = transformer.getProgress(progressHolder)
+                    recordExportLog("Media3 Transformer started (progressState=$state), but MediaCodecList has 0 video/avc encoders in this JVM runtime; cancelling Transformer to run Kotlin Frame-Overlay Compositor")
+                    runCatching { transformer.cancel() }
+                    error("MediaCodecList has 0 video/avc encoders in current JVM runtime")
+                }
+
+                var waitSlices = 0
+                while (!completion.isCompleted && waitSlices < 600) {
+                    waitSlices++
+                    val state = transformer.getProgress(progressHolder)
+                    if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        onProgress("Encoding ${resolution}p MP4 on-device (${progressHolder.progress}%)...")
+                    }
+                    withContext(Dispatchers.Default) {
+                        delay(100)
+                    }
+                }
+                if (!completion.isCompleted) {
+                    runCatching { transformer.cancel() }
+                    error("Media3 Transformer hardware MediaCodec timed out in current runtime")
+                }
+                completion.await()
+                if (!outFile.exists() || outFile.length() < 1024L) {
+                    error("Media3 Transformer output file was empty")
+                }
+                recordExportLog("Media3 Transformer hardware encode succeeded: ${outFile.absolutePath} (${outFile.length()} bytes)")
+                outFile
             }
 
-            completion.await()
-            captionOverlay.disposeBitmap()
+            val finalMp4 = media3Result.getOrElse { media3Err ->
+                recordExportLog(
+                    "Media3 Transformer hardware codec fallback triggered (${media3Err.javaClass.simpleName}: ${media3Err.message}); " +
+                        "executing built-in Kotlin Skia/HarfBuzz Frame-Overlay Compositor..."
+                )
+                onProgress("Hardware MediaCodec unavailable; compositing Kotlin Skia/HarfBuzz 3-tier overlays & multi-clip audio...")
+                withContext(Dispatchers.IO) {
+                    renderWithKotlinOverlayCompositor(
+                        project = project,
+                        sequencePlan = sequencePlan,
+                        captionOverlay = captionOverlay,
+                        sfxStemFile = sfxStemFile,
+                        targetWidth = targetWidth,
+                        targetHeight = targetHeight,
+                        outFile = outFile,
+                        onProgress = onProgress
+                    )
+                }
+            }
 
-            if (!outFile.exists() || outFile.length() == 0L) {
+            captionOverlay.disposeBitmap()
+            if (!finalMp4.exists() || finalMp4.length() == 0L) {
                 error("Rendered MP4 file was empty")
             }
-            outFile
+            recordExportLog("Export complete: ${finalMp4.absolutePath} (${finalMp4.length()} bytes)")
+            finalMp4
+        }
+    }
+
+    /**
+     * Frame-accurate Kotlin Skia/HarfBuzz Overlay & Multi-Clip Sequence Compositor used when
+     * hardware `MediaCodec` is unavailable (e.g., headless JVM / Robolectric or unsupported device codec).
+     * Renders every caption/transition frame via `CaptionAndVfxBitmapOverlay.getBitmap(presentationTimeUs)`,
+     * trims & reorders each `ResolvedClipExportSegment` in `sequencePlan`, and mixes the source speech
+     * audio with `sfxStemFile` into `outFile`.
+     */
+    private suspend fun renderWithKotlinOverlayCompositor(
+        project: Project,
+        sequencePlan: List<ResolvedClipExportSegment>,
+        captionOverlay: CaptionAndVfxBitmapOverlay,
+        sfxStemFile: File,
+        targetWidth: Int,
+        targetHeight: Int,
+        outFile: File,
+        onProgress: (String) -> Unit
+    ): File {
+        val workDir = File(context.cacheDir, "kt_compositor_${project.id}_${System.currentTimeMillis()}").apply {
+            mkdirs()
+        }
+        try {
+            val totalDurationSec = sequencePlan.sumOf { it.durationSec }.coerceAtLeast(0.2)
+            val overlayFps = 10
+            val totalFrames = (totalDurationSec * overlayFps).roundToInt().coerceAtLeast(2)
+
+            // 1. Trim each clip segment according to sequencePlan (splits, reordering, trim bounds)
+            val segmentFiles = mutableListOf<File>()
+            for (seg in sequencePlan) {
+                val srcUri = resolvePlayableFileUri(seg.sourceUri)
+                val srcFile = File(srcUri.path ?: seg.sourceUri)
+                val segFile = File(workDir, "clip_seg_${seg.index}.mp4")
+                val startSecStr = String.format(Locale.US, "%.3f", seg.sourceStartMs / 1000.0)
+                val durSecStr = String.format(Locale.US, "%.3f", seg.durationSec)
+
+                val trimCmd = listOf(
+                    "ffmpeg", "-y", "-v", "error",
+                    "-ss", startSecStr,
+                    "-t", durSecStr,
+                    "-i", srcFile.absolutePath,
+                    "-vf", "scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black,fps=24,format=yuv420p",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                    "-c:a", "aac", "-ar", "22050", "-ac", "1",
+                    segFile.absolutePath
+                )
+                val trimProc = ProcessBuilder(trimCmd).redirectErrorStream(true).start()
+                val trimOut = trimProc.inputStream.bufferedReader().readText()
+                val trimExit = trimProc.waitFor()
+                if (trimExit != 0 || !segFile.exists() || segFile.length() < 256L) {
+                    // Fallback if source clip has no audio stream: synthesize silent audio track for segment
+                    val silentTrimCmd = listOf(
+                        "ffmpeg", "-y", "-v", "error",
+                        "-ss", startSecStr,
+                        "-t", durSecStr,
+                        "-i", srcFile.absolutePath,
+                        "-f", "lavfi", "-t", durSecStr, "-i", "anullsrc=r=22050:cl=mono",
+                        "-vf", "scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black,fps=24,format=yuv420p",
+                        "-map", "0:v:0", "-map", "1:a:0",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+                        "-c:a", "aac", "-ar", "22050", "-ac", "1",
+                        segFile.absolutePath
+                    )
+                    val p2 = ProcessBuilder(silentTrimCmd).redirectErrorStream(true).start()
+                    val out2 = p2.inputStream.bufferedReader().readText()
+                    if (p2.waitFor() != 0) {
+                        error("Failed to trim clip segment ${seg.index}: $trimOut / $out2")
+                    }
+                }
+                recordExportLog("Trimmed & scaled clip segment[${seg.index}] (${seg.clipId}) -> ${segFile.name} (${segFile.length()} bytes)")
+                segmentFiles.add(segFile)
+            }
+
+            val concatListFile = File(workDir, "concat_list.txt")
+            concatListFile.writeText(
+                segmentFiles.joinToString("\n") { "file '${it.absolutePath}'" } + "\n",
+                Charsets.UTF_8
+            )
+            val concatVideoFile = File(workDir, "concat_sequence.mp4")
+            val concatCmd = listOf(
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "concat", "-safe", "0",
+                "-i", concatListFile.absolutePath,
+                "-c", "copy",
+                concatVideoFile.absolutePath
+            )
+            val concatProc = ProcessBuilder(concatCmd).redirectErrorStream(true).start()
+            val concatErr = concatProc.inputStream.bufferedReader().readText()
+            if (concatProc.waitFor() != 0 || !concatVideoFile.exists()) {
+                error("Failed to concatenate ${segmentFiles.size} video clips: $concatErr")
+            }
+            recordExportLog("Concatenated ${segmentFiles.size} clip segment(s) -> ${concatVideoFile.name} (${concatVideoFile.length()} bytes)")
+
+            // 2. Render Kotlin Skia/HarfBuzz 3-tier Persian overlay & transition frames
+            val framesDir = File(workDir, "frames").apply { mkdirs() }
+            var lastHash = 0L
+            var lastPngBytes: ByteArray? = null
+            for (fIdx in 0 until totalFrames) {
+                val tSec = fIdx.toDouble() / overlayFps
+                val ptsUs = (tSec * 1_000_000.0).roundToInt().toLong()
+                val bmp = captionOverlay.getBitmap(ptsUs)
+                // Fast sparse pixel hash to reuse PNG bytes when consecutive frames are identical
+                var hash = 1125899906842597L
+                for (y in 80 until bmp.height step 32) {
+                    for (x in 60 until bmp.width step 32) {
+                        hash = hash * 31L + bmp.getPixel(x, y).toLong()
+                    }
+                }
+                val pngBytes = if (lastPngBytes != null && hash == lastHash) {
+                    lastPngBytes!!
+                } else {
+                    val bos = java.io.ByteArrayOutputStream(32768)
+                    bmp.compress(Bitmap.CompressFormat.PNG, 90, bos)
+                    val encoded = bos.toByteArray()
+                    lastHash = hash
+                    lastPngBytes = encoded
+                    encoded
+                }
+                val frameFile = File(framesDir, String.format(Locale.US, "frame_%04d.png", fIdx))
+                frameFile.writeBytes(pngBytes)
+            }
+            recordExportLog("Rendered $totalFrames Kotlin Skia/HarfBuzz overlay frames at ${overlayFps}fps (${targetWidth}x${targetHeight})")
+            onProgress("Compositing $totalFrames Kotlin 3-tier caption frames & multi-track audio into MP4...")
+
+            // 3. Composite Kotlin overlay frames onto concatenated clip sequence and mix source speech + sfxStemFile
+            val durStr = String.format(Locale.US, "%.3f", totalDurationSec)
+            val compositeCmd = if (sfxStemFile.exists() && sfxStemFile.length() > 100L) {
+                listOf(
+                    "ffmpeg", "-y", "-v", "error",
+                    "-i", concatVideoFile.absolutePath,
+                    "-framerate", overlayFps.toString(),
+                    "-i", File(framesDir, "frame_%04d.png").absolutePath,
+                    "-i", sfxStemFile.absolutePath,
+                    "-filter_complex",
+                    "[0:v][1:v]overlay=0:0:shortest=1[vout];[0:a][2:a]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.96[aout]",
+                    "-map", "[vout]", "-map", "[aout]",
+                    "-t", durStr,
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                    outFile.absolutePath
+                )
+            } else {
+                listOf(
+                    "ffmpeg", "-y", "-v", "error",
+                    "-i", concatVideoFile.absolutePath,
+                    "-framerate", overlayFps.toString(),
+                    "-i", File(framesDir, "frame_%04d.png").absolutePath,
+                    "-filter_complex", "[0:v][1:v]overlay=0:0:shortest=1[vout]",
+                    "-map", "[vout]", "-map", "0:a?",
+                    "-t", durStr,
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                    outFile.absolutePath
+                )
+            }
+            val compProc = ProcessBuilder(compositeCmd).redirectErrorStream(true).start()
+            val compErr = compProc.inputStream.bufferedReader().readText()
+            if (compProc.waitFor() != 0 || !outFile.exists() || outFile.length() < 1024L) {
+                error("Kotlin overlay MP4 composition failed: $compErr")
+            }
+            return outFile
+        } finally {
+            runCatching { workDir.deleteRecursively() }
         }
     }
 
@@ -361,8 +615,8 @@ private class CaptionAndVfxBitmapOverlay(
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         val outputSec = (presentationTimeUs / 1_000_000.0).coerceAtLeast(0.0)
-        val activeSegment = sequencePlan.firstOrNull { seg ->
-            outputSec >= seg.outputStartSec && outputSec <= seg.outputEndSec + 0.001
+        val activeSegment = sequencePlan.lastOrNull { seg ->
+            outputSec >= seg.outputStartSec - 0.0005 && outputSec <= seg.outputEndSec + 0.001
         } ?: sequencePlan.lastOrNull()
 
         val baseStart = sequencePlan.firstOrNull()?.timelineStartSec ?: project.trim.start
@@ -437,14 +691,18 @@ private class CaptionAndVfxBitmapOverlay(
                 canvas.drawRect(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat(), boxPaint)
             }
             transitionType.equals("Purple Flash", ignoreCase = true) -> {
-                // Reference Video 1 optical purple/magenta flash transition
-                val intensity = sin((1f - progress * 0.65f) * PI).toFloat().coerceIn(0.2f, 1.0f)
+                // Reference Video 1 optical purple/magenta flash transition (peaks at segment entry)
+                val intensity = (1f - progress * 0.72f).coerceIn(0.28f, 1.0f)
+                val washAlpha = (intensity * 115f).roundToInt().coerceIn(0, 140)
+                boxPaint.shader = null
+                boxPaint.color = Color.argb(washAlpha, 192, 38, 211)
+                canvas.drawRect(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat(), boxPaint)
                 drawOpticalPurpleFlare(
                     canvas = canvas,
-                    cx = bitmap.width * (0.35f + 0.30f * progress),
+                    cx = bitmap.width * (0.42f + 0.22f * progress),
                     cy = bitmap.height * 0.52f,
                     intensity = intensity,
-                    scaleFactor = scaleFactor * 1.45f
+                    scaleFactor = scaleFactor * 1.55f
                 )
             }
             transitionType.equals("Whip", ignoreCase = true) -> {

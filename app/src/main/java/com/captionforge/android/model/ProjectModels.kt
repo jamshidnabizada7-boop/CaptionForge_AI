@@ -61,17 +61,12 @@ data class CaptionCue(
                 else -> {
                     val tokens = cleanText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
                     when {
-                        tokens.size >= 5 -> {
+                        tokens.size >= 4 -> {
                             val t1 = tokens.take(2).joinToString(" ")
-                            val t2 = tokens.drop(2).take(max(1, tokens.size - 4)).joinToString(" ")
-                            val t3 = tokens.takeLast(2).joinToString(" ")
+                            val t2 = tokens[2]
+                            val t3 = tokens.drop(3).joinToString(" ")
                             Triple(t1, t2, t3)
                         }
-                        tokens.size == 4 -> Triple(
-                            tokens.take(1).joinToString(" "),
-                            tokens.drop(1).take(2).joinToString(" "),
-                            tokens.takeLast(1).joinToString(" ")
-                        )
                         tokens.size == 3 -> Triple(tokens[0], tokens[1], tokens[2])
                         tokens.size == 2 -> Triple(tokens[0], tokens[1], "")
                         else -> Triple("", text.trim(), "")

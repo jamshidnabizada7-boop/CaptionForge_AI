@@ -205,6 +205,17 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         repository.saveLocalProject(project)
     }
 
+    fun closeProject() {
+        _activeProject.value?.let { current ->
+            repository.saveLocalProject(current)
+        }
+        _isPlaying.value = false
+        _sfxPulse.value = false
+        _selectedCueId.value = null
+        _selectedOverlayId.value = null
+        _activeProject.value = null
+    }
+
     fun openDemoShowcase(which: Int, onOpened: () -> Unit) {
         val sample = if (which == 2) {
             SampleProjectsFactory.createVideo2VfxShowcaseProject()
@@ -1497,12 +1508,12 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    fun startVideoExport(resolution: Int) {
+    fun startVideoExport(resolution: Int, forceOnDevice: Boolean = false) {
         val pr = _activeProject.value ?: return
         viewModelScope.launch {
             _exportState.value = ExportUiState(
                 isExporting = true,
-                progressMessage = if (_isBackendOnline.value) {
+                progressMessage = if (!forceOnDevice && _isBackendOnline.value) {
                     "Connecting to FastAPI FFmpeg render service..."
                 } else {
                     "Starting on-device Media3 Transformer MP4 encoder..."
@@ -1519,7 +1530,7 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
             runCatching { srtFile.writeText(srtText, Charsets.UTF_8) }
             _exportState.value = _exportState.value.copy(exportedSrtFile = srtFile)
 
-            if (_isBackendOnline.value) {
+            if (!forceOnDevice && _isBackendOnline.value) {
                 val backendRes = repository.runBackendExport(
                     project = updatedPr,
                     resolution = resolution,
