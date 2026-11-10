@@ -2,8 +2,15 @@ package com.captionforge.android.audio
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaPlayer
 import android.media.SoundPool
+import android.net.Uri
+import com.captionforge.android.model.AudioClip
+import com.captionforge.android.model.AudioVolumeKeyframe
+import com.captionforge.android.model.Project
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
@@ -13,6 +20,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.random.Random
@@ -791,10 +799,319 @@ class SfxPlayerManager(private val context: Context) {
     }
 
     /**
-     * Synthesizes a continuous mixed SFX WAV stem spanning [project.trim.start .. project.trim.end]
-     * containing all timeline AudioClips, cue entrance SFX, and word-level SFX triggers.
+     * Resolves an audio clip source string (absolute path, `file://`, `content://`, `asset:///`,
+     * or relative `user_audio/` / `sfx/` path) to a local readable File if it exists on disk.
      */
-    fun renderProjectSfxStemWav(project: com.captionforge.android.model.Project, outFile: File): File {
+    private fun resolveAudioClipFile(source: String): File? {
+        val clean = source.trim()
+        if (clean.isEmpty()) return null
+
+        if (clean.startsWith("content://")) {
+            val uri = runCatching { Uri.parse(clean) }.getOrNull() ?: return null
+            val cached = File(context.cacheDir, "decoded_uri_${abs(clean.hashCode())}.audio")
+            if (!cached.exists() || cached.length() < 64L) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        cached.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+            return if (cached.exists() && cached.length() > 44L) cached else null
+        }
+
+        if (clean.startsWith("asset:///")) {
+            val assetPath = clean.removePrefix("asset:///")
+            val cached = File(context.cacheDir, "decoded_asset_${assetPath.replace('/', '_')}")
+            if (!cached.exists() || cached.length() < 64L) {
+                runCatching {
+                    context.assets.open(assetPath).use { input ->
+                        cached.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+            return if (cached.exists() && cached.length() > 44L) cached else null
+        }
+
+        val rawPath = if (clean.startsWith("file://")) {
+            runCatching { Uri.parse(clean).path }.getOrNull() ?: clean.removePrefix("file://")
+        } else {
+            clean
+        }
+
+        val candidates = listOf(
+            File(rawPath),
+            File(context.filesDir, rawPath),
+            File(userAudioDir, rawPath.substringAfterLast('/')),
+            File(sfxDir, rawPath.substringAfterLast('/'))
+        )
+        return candidates.firstOrNull { it.exists() && it.isFile && it.length() > 44L }
+    }
+
+    /**
+     * Decodes a RIFF/WAVE byte array (8-bit, 16-bit, 24-bit, 32-bit PCM or 32-bit IEEE float,
+     * mono or multi-channel stereo) into normalized [-1.0f .. 1.0f] mono float samples at `targetSampleRate`.
+     */
+    fun decodeRiffWavBytes(bytes: ByteArray, targetSampleRate: Int): FloatArray? {
+        if (bytes.size < 44) return null
+        val headerTag = String(bytes, 0, 4, Charsets.US_ASCII)
+        val waveTag = String(bytes, 8, 4, Charsets.US_ASCII)
+        if (headerTag != "RIFF" || waveTag != "WAVE") return null
+
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        var offset = 12
+        var audioFormat = 1
+        var numChannels = 1
+        var sampleRate = targetSampleRate
+        var bitsPerSample = 16
+        var dataOffset = -1
+        var dataSize = 0
+
+        while (offset + 8 <= bytes.size) {
+            val chunkId = String(bytes, offset, 4, Charsets.US_ASCII)
+            val chunkSize = buf.getInt(offset + 4).coerceAtLeast(0)
+            val chunkDataStart = offset + 8
+            if (chunkId == "fmt " && chunkDataStart + 16 <= bytes.size) {
+                audioFormat = buf.getShort(chunkDataStart).toInt() and 0xFFFF
+                numChannels = (buf.getShort(chunkDataStart + 2).toInt() and 0xFFFF).coerceAtLeast(1)
+                sampleRate = buf.getInt(chunkDataStart + 4).coerceAtLeast(8000)
+                bitsPerSample = (buf.getShort(chunkDataStart + 14).toInt() and 0xFFFF).coerceAtLeast(8)
+            } else if (chunkId == "data") {
+                dataOffset = chunkDataStart
+                dataSize = min(chunkSize, bytes.size - chunkDataStart)
+                break
+            }
+            val paddedChunkSize = chunkSize + (chunkSize and 1)
+            if (paddedChunkSize < 0 || chunkDataStart + paddedChunkSize <= offset) break
+            offset = chunkDataStart + paddedChunkSize
+        }
+
+        if (dataOffset < 0 || dataSize <= 0) return null
+        val bytesPerSample = (bitsPerSample / 8).coerceAtLeast(1)
+        val frameSize = bytesPerSample * numChannels
+        val totalFrames = dataSize / frameSize
+        if (totalFrames <= 0) return null
+
+        val monoNative = FloatArray(totalFrames)
+        for (f in 0 until totalFrames) {
+            val framePos = dataOffset + f * frameSize
+            var channelSum = 0f
+            for (ch in 0 until numChannels) {
+                val samplePos = framePos + ch * bytesPerSample
+                val sampleVal = when {
+                    audioFormat == 3 && bitsPerSample == 32 && samplePos + 4 <= bytes.size -> {
+                        buf.getFloat(samplePos).coerceIn(-1f, 1f)
+                    }
+                    bitsPerSample == 8 && samplePos + 1 <= bytes.size -> {
+                        val u = bytes[samplePos].toInt() and 0xFF
+                        ((u - 128) / 128f).coerceIn(-1f, 1f)
+                    }
+                    bitsPerSample == 16 && samplePos + 2 <= bytes.size -> {
+                        (buf.getShort(samplePos) / 32768f).coerceIn(-1f, 1f)
+                    }
+                    bitsPerSample == 24 && samplePos + 3 <= bytes.size -> {
+                        val b0 = bytes[samplePos].toInt() and 0xFF
+                        val b1 = bytes[samplePos + 1].toInt() and 0xFF
+                        val b2 = bytes[samplePos + 2].toInt() // signed MSB
+                        val s24 = (b2 shl 16) or (b1 shl 8) or b0
+                        (s24 / 8388608f).coerceIn(-1f, 1f)
+                    }
+                    bitsPerSample == 32 && samplePos + 4 <= bytes.size -> {
+                        (buf.getInt(samplePos) / 2147483648f).coerceIn(-1f, 1f)
+                    }
+                    else -> 0f
+                }
+                channelSum += sampleVal
+            }
+            monoNative[f] = (channelSum / numChannels).coerceIn(-1f, 1f)
+        }
+
+        return resampleMonoFloat(monoNative, sampleRate, targetSampleRate)
+    }
+
+    private fun resampleMonoFloat(src: FloatArray, srcRate: Int, dstRate: Int): FloatArray {
+        if (src.isEmpty() || srcRate == dstRate || srcRate <= 0 || dstRate <= 0) return src
+        val outLen = ((src.size.toLong() * dstRate) / srcRate).toInt().coerceAtLeast(1)
+        val out = FloatArray(outLen)
+        val ratio = srcRate.toDouble() / dstRate.toDouble()
+        for (i in 0 until outLen) {
+            val srcPos = i * ratio
+            val idx0 = srcPos.toInt().coerceIn(0, src.lastIndex)
+            val idx1 = (idx0 + 1).coerceAtMost(src.lastIndex)
+            val frac = (srcPos - idx0).toFloat()
+            out[i] = src[idx0] * (1f - frac) + src[idx1] * frac
+        }
+        return out
+    }
+
+    /**
+     * Decodes compressed audio files (MP3, M4A, AAC, OGG, FLAC, MP4) using Android's
+     * `MediaExtractor` + `MediaCodec`, with a host `ffmpeg` fallback when running in JVM unit tests.
+     */
+    private fun decodeCompressedAudioFile(file: File, targetSampleRate: Int): FloatArray? {
+        // 1. Try Android MediaExtractor + MediaCodec
+        val codecResult = runCatching {
+            val extractor = MediaExtractor()
+            try {
+                extractor.setDataSource(file.absolutePath)
+                var audioTrackIdx = -1
+                var format: MediaFormat? = null
+                for (i in 0 until extractor.trackCount) {
+                    val f = extractor.getTrackFormat(i)
+                    val mime = f.getString(MediaFormat.KEY_MIME) ?: ""
+                    if (mime.startsWith("audio/")) {
+                        audioTrackIdx = i
+                        format = f
+                        break
+                    }
+                }
+                if (audioTrackIdx < 0 || format == null) return@runCatching null
+                extractor.selectTrack(audioTrackIdx)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: return@runCatching null
+                var srcSampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                    format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                } else targetSampleRate
+                var channels = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                    format.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
+                } else 1
+
+                val codec = MediaCodec.createDecoderByType(mime)
+                codec.configure(format, null, null, 0)
+                codec.start()
+
+                val pcmOut = ByteArrayOutputStream()
+                val info = MediaCodec.BufferInfo()
+                var inputDone = false
+                var outputDone = false
+                var safetyLoops = 0
+
+                while (!outputDone && safetyLoops < 20000) {
+                    safetyLoops++
+                    if (!inputDone) {
+                        val inIdx = codec.dequeueInputBuffer(5000)
+                        if (inIdx >= 0) {
+                            val inBuf = codec.getInputBuffer(inIdx)
+                            if (inBuf != null) {
+                                val read = extractor.readSampleData(inBuf, 0)
+                                if (read < 0) {
+                                    codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    inputDone = true
+                                } else {
+                                    val pts = extractor.sampleTime
+                                    codec.queueInputBuffer(inIdx, 0, read, pts, 0)
+                                    extractor.advance()
+                                }
+                            }
+                        }
+                    }
+
+                    val outIdx = codec.dequeueOutputBuffer(info, 5000)
+                    when {
+                        outIdx >= 0 -> {
+                            val outBuf = codec.getOutputBuffer(outIdx)
+                            if (outBuf != null && info.size > 0) {
+                                outBuf.position(info.offset)
+                                outBuf.limit(info.offset + info.size)
+                                val chunk = ByteArray(info.size)
+                                outBuf.get(chunk)
+                                pcmOut.write(chunk)
+                            }
+                            codec.releaseOutputBuffer(outIdx, false)
+                            if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                outputDone = true
+                            }
+                        }
+                        outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            val newFmt = codec.outputFormat
+                            if (newFmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                                srcSampleRate = newFmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            }
+                            if (newFmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                                channels = newFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
+                            }
+                        }
+                    }
+                }
+                codec.stop()
+                codec.release()
+
+                val rawBytes = pcmOut.toByteArray()
+                if (rawBytes.size < 4) return@runCatching null
+                val shortBuf = ByteBuffer.wrap(rawBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                val totalShorts = shortBuf.remaining()
+                val totalFrames = totalShorts / channels
+                if (totalFrames <= 0) return@runCatching null
+                val mono = FloatArray(totalFrames)
+                for (f in 0 until totalFrames) {
+                    var sum = 0f
+                    for (c in 0 until channels) {
+                        sum += shortBuf.get(f * channels + c) / 32768f
+                    }
+                    mono[f] = (sum / channels).coerceIn(-1f, 1f)
+                }
+                resampleMonoFloat(mono, srcSampleRate, targetSampleRate)
+            } finally {
+                runCatching { extractor.release() }
+            }
+        }.getOrNull()
+
+        if (codecResult != null && codecResult.isNotEmpty()) {
+            return codecResult
+        }
+
+        // 2. Host FFmpeg CLI fallback (for JVM / container test environments)
+        return runCatching {
+            val proc = ProcessBuilder(
+                "ffmpeg", "-v", "error",
+                "-i", file.absolutePath,
+                "-f", "s16le", "-ac", "1", "-ar", targetSampleRate.toString(),
+                "-"
+            ).start()
+            val rawBytes = proc.inputStream.readBytes()
+            proc.waitFor()
+            if (rawBytes.size < 4) return@runCatching null
+            val shortBuf = ByteBuffer.wrap(rawBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+            val out = FloatArray(shortBuf.remaining())
+            for (i in out.indices) {
+                out[i] = (shortBuf.get(i) / 32768f).coerceIn(-1f, 1f)
+            }
+            out
+        }.getOrNull()
+    }
+
+    /**
+     * Decodes any user-imported or bundled audio file (`clip.source`) to mono float samples at `targetSampleRate`.
+     */
+    fun decodeAudioClipSamples(source: String, targetSampleRate: Int = 22050): FloatArray? {
+        val file = resolveAudioClipFile(source) ?: return null
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        decodeRiffWavBytes(bytes, targetSampleRate)?.let { return it }
+        return decodeCompressedAudioFile(file, targetSampleRate)
+    }
+
+    private fun interpolateVolumeKeyframes(
+        keyframes: List<AudioVolumeKeyframe>,
+        timeInClipSec: Double
+    ): Float {
+        if (keyframes.isEmpty()) return 1f
+        val sorted = keyframes.sortedBy { it.time }
+        val prev = sorted.lastOrNull { it.time <= timeInClipSec } ?: sorted.first()
+        val next = sorted.firstOrNull { it.time >= timeInClipSec } ?: sorted.last()
+        if (prev == next || abs(next.time - prev.time) < 0.001) {
+            return prev.volume.toFloat().coerceIn(0f, 2f)
+        }
+        val t = ((timeInClipSec - prev.time) / (next.time - prev.time)).coerceIn(0.0, 1.0)
+        return (prev.volume + (next.volume - prev.volume) * t).toFloat().coerceIn(0f, 2f)
+    }
+
+    /**
+     * Synthesizes and mixes a continuous WAV stem spanning [project.trim.start .. project.trim.end]
+     * containing:
+     * 1. Actual decoded user-imported audio files (or studio SFX presets) for all timeline `AudioClip` items,
+     *    strictly respecting `clip.source`, `clip.start`, `clip.trimStart`, `clip.volume`, `clip.fadeIn`,
+     *    `clip.fadeOut`, `clip.duration`, `clip.loop`, `clip.keyframes`, and `clip.ducking`.
+     * 2. Cue entrance SFX and word-level SFX triggers.
+     */
+    fun renderProjectSfxStemWav(project: Project, outFile: File): File {
         val sr = 22050
         val trimStart = project.trim.start.coerceAtLeast(0.0)
         val trimEnd = project.trim.end.coerceAtLeast(trimStart + 0.5)
@@ -805,6 +1122,10 @@ class SfxPlayerManager(private val context: Context) {
         val masterSfxGain = (project.effects.sfxVolume.coerceIn(0, 100) / 100f)
         val masterMusicGain = (project.effects.musicVolume.coerceIn(0, 100) / 100f)
         val mode = project.effects.sfxMode
+
+        val activeSpeechWindows: List<Pair<Double, Double>> = project.tracks
+            .filter { it.visible }
+            .flatMap { tr -> tr.captions.map { it.start to it.end } }
 
         fun mixPresetAt(presetQuery: String, timelineTimeSec: Double, clipVolume: Float, maxDurSec: Double = 3.0) {
             val preset = findPreset(presetQuery) ?: return
@@ -821,13 +1142,93 @@ class SfxPlayerManager(private val context: Context) {
             }
         }
 
-        // 1. Timeline AudioClips
-        project.audioClips.forEach { clip ->
-            val gain = (clip.volume.toFloat() * (if (clip.isMusic) masterMusicGain else masterSfxGain)).coerceIn(0f, 1.2f)
-            mixPresetAt(clip.category.ifBlank { clip.name }, clip.start, gain, clip.duration.coerceAtLeast(0.2))
+        fun mixTimelineAudioClip(clip: AudioClip) {
+            val masterGain = if (clip.isMusic) masterMusicGain else masterSfxGain
+            // Decode actual user-imported audio file from clip.source first; only fall back to preset if no file exists
+            val decodedFileSamples: FloatArray? = decodeAudioClipSamples(clip.source, sr)
+            val rawSamples: FloatArray = if (decodedFileSamples != null && decodedFileSamples.isNotEmpty()) {
+                decodedFileSamples
+            } else {
+                val presetKey = clip.source.substringAfterLast('/').substringBeforeLast('.')
+                    .ifBlank { clip.category.ifBlank { clip.name } }
+                val preset = findPreset(presetKey) ?: findPreset(clip.category) ?: findPreset(clip.name) ?: return
+                val shorts = synthesizePresetSamples(preset.id, sr)
+                FloatArray(shorts.size) { idx -> shorts[idx] / 32768f }
+            }
+
+            if (rawSamples.isEmpty()) return
+
+            // Respect clip.trimStart offset into the decoded source audio
+            val sourceTrimOffsetSamples = (clip.trimStart.coerceAtLeast(0.0) * sr).toInt()
+            if (!clip.loop && sourceTrimOffsetSamples >= rawSamples.size) return
+
+            val availableSourceSamples = if (clip.loop) {
+                rawSamples.size
+            } else {
+                (rawSamples.size - sourceTrimOffsetSamples).coerceAtLeast(0)
+            }
+            if (availableSourceSamples <= 0) return
+
+            // Respect clip.duration (clamped to available source audio unless loop == true)
+            val requestedClipDurSec = clip.duration.coerceAtLeast(0.05)
+            val maxAvailableDurSec = availableSourceSamples.toDouble() / sr
+            val effectiveClipDurSec = if (clip.loop) {
+                requestedClipDurSec
+            } else {
+                min(requestedClipDurSec, maxAvailableDurSec)
+            }
+            val clipOutSampleCount = (effectiveClipDurSec * sr).toInt()
+            if (clipOutSampleCount <= 0) return
+
+            val relStartSec = clip.start - trimStart
+            val dstStartSample = (relStartSec * sr).toInt()
+            val fadeInSec = clip.fadeIn.coerceAtLeast(0.0)
+            val fadeOutSec = clip.fadeOut.coerceAtLeast(0.0)
+            val fadeOutStartSec = (effectiveClipDurSec - fadeOutSec).coerceAtLeast(0.0)
+            val baseClipGain = (clip.volume.toFloat() * masterGain).coerceIn(0f, 2.0f)
+
+            for (i in 0 until clipOutSampleCount) {
+                val dstIdx = dstStartSample + i
+                if (dstIdx !in 0 until totalSamples) continue
+
+                val srcIdx = if (clip.loop) {
+                    (sourceTrimOffsetSamples + i) % rawSamples.size
+                } else {
+                    sourceTrimOffsetSamples + i
+                }
+                if (srcIdx !in rawSamples.indices) break
+
+                val tInClipSec = i.toDouble() / sr
+                val absTimelineSec = clip.start + tInClipSec
+
+                val fadeInFactor = if (fadeInSec > 0.001 && tInClipSec < fadeInSec) {
+                    (tInClipSec / fadeInSec).toFloat().coerceIn(0f, 1f)
+                } else 1f
+
+                val fadeOutFactor = if (fadeOutSec > 0.001 && tInClipSec > fadeOutStartSec) {
+                    ((effectiveClipDurSec - tInClipSec) / fadeOutSec).toFloat().coerceIn(0f, 1f)
+                } else 1f
+
+                val kfFactor = interpolateVolumeKeyframes(clip.keyframes, tInClipSec)
+                val duckFactor = if (clip.isMusic && clip.ducking &&
+                    activeSpeechWindows.any { absTimelineSec >= it.first && absTimelineSec <= it.second }
+                ) {
+                    0.42f
+                } else {
+                    1.0f
+                }
+
+                val sampleGain = baseClipGain * fadeInFactor * fadeOutFactor * kfFactor * duckFactor
+                mixBuffer[dstIdx] = (mixBuffer[dstIdx] + rawSamples[srcIdx] * sampleGain).coerceIn(-0.98f, 0.98f)
+            }
         }
 
-        // 2. Cue entrance SFX & word-level SFX
+        // 1. Mix all Timeline AudioClips (user-imported audio files + SFX/music clips)
+        project.audioClips.forEach { clip ->
+            mixTimelineAudioClip(clip)
+        }
+
+        // 2. Mix Cue entrance SFX & word-level SFX triggers
         project.tracks.filter { it.visible }.forEach { track ->
             track.captions.forEach { cue ->
                 if (mode.equals("Sentence", ignoreCase = true) || mode.equals("Both", ignoreCase = true)) {

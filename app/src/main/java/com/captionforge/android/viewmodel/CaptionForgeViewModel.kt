@@ -1053,6 +1053,49 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
         commitProjectChange(pr.copy(videoClips = updated))
     }
 
+    fun reorderVideoClips(fromIndex: Int, toIndex: Int) {
+        val pr = _activeProject.value ?: return
+        if (fromIndex !in pr.videoClips.indices || toIndex !in pr.videoClips.indices || fromIndex == toIndex) return
+        val reordered = pr.videoClips.toMutableList().apply {
+            val moved = removeAt(fromIndex)
+            add(toIndex, moved)
+        }
+        commitProjectChange(recalculateVideoClipTimeline(pr, reordered))
+    }
+
+    fun trimVideoClipSegment(clipId: String, newSourceTrimStart: Double, newDurationSec: Double) {
+        val pr = _activeProject.value ?: return
+        val validDuration = newDurationSec.coerceAtLeast(0.2)
+        val validTrimStart = newSourceTrimStart.coerceAtLeast(0.0)
+        val updated = pr.videoClips.map { clip ->
+            if (clip.id == clipId) {
+                clip.copy(
+                    sourceTrimStart = (validTrimStart * 100.0).roundToInt() / 100.0,
+                    endInTimeline = ((clip.startInTimeline + validDuration) * 100.0).roundToInt() / 100.0
+                )
+            } else clip
+        }
+        commitProjectChange(recalculateVideoClipTimeline(pr, updated))
+    }
+
+    private fun recalculateVideoClipTimeline(project: Project, clips: List<VideoClipSegment>): Project {
+        if (clips.isEmpty()) return project
+        var cursor = project.trim.start.coerceAtLeast(0.0)
+        val reflowed = clips.map { clip ->
+            val dur = (clip.endInTimeline - clip.startInTimeline).coerceAtLeast(0.2)
+            val start = (cursor * 100.0).roundToInt() / 100.0
+            val end = ((cursor + dur) * 100.0).roundToInt() / 100.0
+            cursor = end
+            clip.copy(startInTimeline = start, endInTimeline = end)
+        }
+        val newTrimEnd = reflowed.last().endInTimeline
+        return project.copy(
+            videoClips = reflowed,
+            trim = project.trim.copy(end = newTrimEnd),
+            duration = max(project.duration, newTrimEnd)
+        )
+    }
+
     // Templates & Graphic Overlays
     fun applyCinematicTemplate(templateId: String) {
         val pr = _activeProject.value ?: return
@@ -1304,31 +1347,38 @@ class CaptionForgeViewModel(application: Application) : AndroidViewModel(applica
     fun triggerAiTranscription(language: String?, model: String) {
         val pr = _activeProject.value ?: return
         viewModelScope.launch {
-            _busyMessage.value = "Connecting to Faster-Whisper ASR engine..."
-            val res = if (_isBackendOnline.value) {
-                repository.runBackendTranscription(pr, language, model) { msg ->
-                    _busyMessage.value = msg
-                }
-            } else {
-                Result.failure(IllegalStateException("Backend offline"))
+            _busyMessage.value = "Running speech recognition (ASR)..."
+            val res = repository.runBackendTranscription(
+                project = pr,
+                language = language,
+                model = model,
+                attemptNetworkBackend = _isBackendOnline.value
+            ) { msg ->
+                _busyMessage.value = msg
             }
             _busyMessage.value = null
             res.fold(
                 onSuccess = { refreshed ->
                     commitProjectChange(refreshed)
                     _activeTrackIndex.value = 0
-                    _selectedCueId.value = refreshed.tracks.firstOrNull()?.captions?.firstOrNull()?.id
+                    val track = refreshed.tracks.firstOrNull()
+                    _selectedCueId.value = track?.captions?.firstOrNull()?.id
                     _selectedWordIndex.value = 0
-                    showToast("AI Transcription complete via FastAPI (${refreshed.tracks.firstOrNull()?.captions?.size ?: 0} cues)")
+                    showToast("ASR Transcription complete (${track?.transcriptionSource ?: "ASR"}: ${track?.captions?.size ?: 0} cues)")
                 },
                 onFailure = {
                     val offlineSegmented = repository.buildOfflineSpeechTranscription(pr, language)
                     commitProjectChange(offlineSegmented)
                     _activeTrackIndex.value = 0
-                    _selectedCueId.value = offlineSegmented.tracks.firstOrNull()?.captions?.firstOrNull()?.id
+                    val track = offlineSegmented.tracks.firstOrNull()
+                    _selectedCueId.value = track?.captions?.firstOrNull()?.id
                     _selectedWordIndex.value = 0
-                    val count = offlineSegmented.tracks.firstOrNull()?.captions?.size ?: 0
-                    showToast("Backend offline: Segmented $count ${(language ?: "fa").uppercase()} captions locally with word timings")
+                    val count = track?.captions?.size ?: 0
+                    if (track?.isDemoTrack == true) {
+                        showToast("ASR offline: Loaded $count [DEMO] sample subtitles (not real speech recognition)")
+                    } else {
+                        showToast("Transcribed $count captions via ${track?.transcriptionSource ?: "local ASR"}")
+                    }
                 }
             )
         }

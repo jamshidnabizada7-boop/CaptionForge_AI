@@ -350,23 +350,154 @@ class ProjectRepository(private val context: Context) {
         error("Job timed out waiting for FastAPI backend")
     }
 
+    interface SupportedAsrEngine {
+        val engineId: String
+        suspend fun transcribe(
+            videoFile: File,
+            trimStart: Double,
+            trimEnd: Double,
+            language: String?,
+            model: String,
+            onProgress: (String) -> Unit
+        ): List<CaptionCue>?
+    }
+
+    companion object {
+        private val customAsrEngines = mutableListOf<SupportedAsrEngine>()
+
+        fun registerAsrEngine(engine: SupportedAsrEngine) {
+            customAsrEngines.removeAll { it.engineId == engine.engineId }
+            customAsrEngines.add(0, engine)
+        }
+
+        fun clearRegisteredAsrEngines() {
+            customAsrEngines.clear()
+        }
+    }
+
+    private fun resolveLocalVideoFile(source: String): File? {
+        val clean = source.trim()
+        if (clean.isEmpty()) return null
+        if (clean.startsWith("asset:///")) {
+            val assetName = clean.removePrefix("asset:///")
+            val cached = File(context.cacheDir, "asr_asset_$assetName")
+            if (!cached.exists() || cached.length() < 512L) {
+                runCatching {
+                    context.assets.open(assetName).use { input ->
+                        cached.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+            return if (cached.exists()) cached else null
+        }
+        val path = if (clean.startsWith("file://")) Uri.parse(clean).path ?: clean.removePrefix("file://") else clean
+        val f = File(path)
+        return if (f.exists()) f else null
+    }
+
+    /**
+     * Attempts genuine speech recognition for any arbitrary imported video through:
+     * 1. Any registered on-device/custom `SupportedAsrEngine`
+     * 2. FastAPI `Faster-Whisper` backend (`POST /api/projects/{id}/transcribe`)
+     * 3. Local Whisper CLI or sidecar ASR transcript (`.srt` / `.vtt`) accompanying the video
+     */
     suspend fun runBackendTranscription(
         project: Project,
         language: String?,
         model: String,
+        attemptNetworkBackend: Boolean = true,
         onProgress: (String) -> Unit
     ): Result<Project> = withContext(Dispatchers.IO) {
+        val langCode = (language ?: "fa").lowercase().trim().ifBlank { "fa" }
+        val localVideoFile = resolveLocalVideoFile(project.source)
+
+        // 1. Check registered SupportedAsrEngine instances first (e.g., on-device ASR / test ASR engine)
+        if (localVideoFile != null && customAsrEngines.isNotEmpty()) {
+            for (engine in customAsrEngines) {
+                val cues = runCatching {
+                    onProgress("Running ${engine.engineId} ASR on ${localVideoFile.name}...")
+                    engine.transcribe(
+                        videoFile = localVideoFile,
+                        trimStart = project.trim.start,
+                        trimEnd = project.trim.end,
+                        language = langCode,
+                        model = model,
+                        onProgress = onProgress
+                    )
+                }.getOrNull()
+                if (!cues.isNullOrEmpty()) {
+                    val normalizedCues = cues.mapIndexed { idx, cue ->
+                        val words = if (cue.words.isNotEmpty()) {
+                            cue.words
+                        } else {
+                            SrtParser.buildWordTimings(cue.text, cue.start, cue.end)
+                        }
+                        cue.copy(
+                            id = cue.id.ifBlank { "asr_${engine.engineId}_${idx + 1}" },
+                            words = words,
+                            isDemoSubtitle = false,
+                            transcriptionSource = engine.engineId
+                        )
+                    }
+                    return@withContext Result.success(
+                        applyTranscribedCuesToProject(
+                            project = project,
+                            langCode = langCode,
+                            cues = normalizedCues,
+                            sourceId = engine.engineId,
+                            isDemo = false
+                        )
+                    )
+                }
+            }
+        }
+
+        // 2. Check for sidecar ASR transcript files next to the imported video (<video>.srt / <video>.<lang>.srt)
+        if (localVideoFile != null) {
+            val baseNoExt = localVideoFile.absolutePath.substringBeforeLast('.')
+            val candidateSidecars = listOf(
+                File("${baseNoExt}.${langCode}.srt"),
+                File("${baseNoExt}.srt"),
+                File("${baseNoExt}.vtt")
+            )
+            val existingSidecar = candidateSidecars.firstOrNull { it.exists() && it.length() > 16L }
+            if (existingSidecar != null) {
+                val parsed = SrtParser.parseSrt(existingSidecar.readText(Charsets.UTF_8))
+                    .filter { it.end >= project.trim.start && it.start <= project.trim.end }
+                    .mapIndexed { idx, c ->
+                        c.copy(
+                            id = "asr_sidecar_${idx + 1}",
+                            isDemoSubtitle = false,
+                            transcriptionSource = "asr_sidecar_srt"
+                        )
+                    }
+                if (parsed.isNotEmpty()) {
+                    return@withContext Result.success(
+                        applyTranscribedCuesToProject(
+                            project = project,
+                            langCode = langCode,
+                            cues = parsed,
+                            sourceId = "asr_sidecar_srt",
+                            isDemo = false
+                        )
+                    )
+                }
+            }
+        }
+
+        if (!attemptNetworkBackend) {
+            return@withContext Result.failure(IllegalStateException("FastAPI ASR backend offline"))
+        }
+
+        // 3. FastAPI Faster-Whisper ASR Server
         runCatching {
             var activeBackendProjectId = project.id
-            if (!project.isSyncedWithBackend && project.source.startsWith("file://")) {
-                val localFile = Uri.parse(project.source).path?.let(::File)
-                if (localFile != null && localFile.exists()) {
-                    onProgress("Uploading video to FastAPI ASR server...")
-                    val reqFile = localFile.asRequestBody("video/mp4".toMediaTypeOrNull())
-                    val part = MultipartBody.Part.createFormData("file", localFile.name, reqFile)
-                    val createdRemote = BackendClient.api().createProject(part)
-                    activeBackendProjectId = createdRemote.id
-                }
+            if (!project.isSyncedWithBackend && localVideoFile != null && localVideoFile.exists()) {
+                onProgress("Uploading video to FastAPI ASR server...")
+                val reqFile = localVideoFile.asRequestBody("video/mp4".toMediaTypeOrNull())
+                val part = MultipartBody.Part.createFormData("file", localVideoFile.name, reqFile)
+                val createdRemote = BackendClient.api().createProject(part)
+                activeBackendProjectId = createdRemote.id
             }
             onProgress("Starting Faster-Whisper ASR on backend...")
             val startRes = BackendClient.api().transcribe(
@@ -375,17 +506,75 @@ class ProjectRepository(private val context: Context) {
             )
             pollBackendJob(startRes.jobId, onProgress)
             val updatedRemote = BackendClient.api().getProject(activeBackendProjectId)
-            // Preserve local playable video URI if local file exists
+            val markedTracks = updatedRemote.tracks.mapIndexed { tIdx, tr ->
+                if (tIdx == 0) {
+                    tr.copy(
+                        isDemoTrack = false,
+                        transcriptionSource = "asr_faster_whisper",
+                        captions = tr.captions.map { c ->
+                            c.copy(
+                                isDemoSubtitle = false,
+                                transcriptionSource = "asr_faster_whisper"
+                            )
+                        }
+                    )
+                } else tr
+            }
             val merged = updatedRemote.copy(
                 id = project.id,
                 source = if (project.source.startsWith("file://") || project.source.startsWith("asset://")) project.source else updatedRemote.source,
                 videoClips = project.videoClips,
+                tracks = markedTracks,
                 isSyncedWithBackend = true
             )
             saveLocalProject(merged)
         }
     }
 
+    private fun applyTranscribedCuesToProject(
+        project: Project,
+        langCode: String,
+        cues: List<CaptionCue>,
+        sourceId: String,
+        isDemo: Boolean
+    ): Project {
+        val defaultFont = when (langCode) {
+            "ur" -> "Noto Nastaliq Urdu"
+            "fa", "prs", "ps", "ar" -> "Vazirmatn"
+            else -> "Montserrat"
+        }
+        val existingTrack = project.tracks.firstOrNull()
+        val trackTitle = if (isDemo) {
+            "[DEMO] Sample Captions (${langCode.uppercase()} — Not Real ASR)"
+        } else {
+            "ASR Captions (${langCode.uppercase()} • $sourceId)"
+        }
+        val updatedFirstTrack = (existingTrack ?: Track(
+            id = "tr_orig",
+            name = trackTitle,
+            language = langCode
+        )).copy(
+            name = trackTitle,
+            language = langCode,
+            style = (existingTrack?.style ?: SubtitleStyle()).copy(font = defaultFont),
+            captions = cues,
+            isDemoTrack = isDemo,
+            transcriptionSource = sourceId
+        )
+        val updatedTracks = if (project.tracks.isEmpty()) {
+            listOf(updatedFirstTrack)
+        } else {
+            project.tracks.toMutableList().apply { this[0] = updatedFirstTrack }
+        }
+        return saveLocalProject(project.copy(tracks = updatedTracks))
+    }
+
+    /**
+     * Generates explicitly labeled `[DEMO]` placeholder subtitles when no ASR engine or network is available,
+     * unless a local sidecar or registered `SupportedAsrEngine` can genuinely transcribe the video first.
+     * Demo subtitles are ALWAYS flagged with `isDemoSubtitle = true`, `isDemoTrack = true`,
+     * `transcriptionSource = "demo_template"`, and `[DEMO]` prefixes so they are never presented as real ASR.
+     */
     fun buildOfflineSpeechTranscription(
         project: Project,
         language: String?
@@ -394,6 +583,36 @@ class ProjectRepository(private val context: Context) {
         val trimStart = project.trim.start.coerceAtLeast(0.0)
         val trimEnd = project.trim.end.coerceAtLeast(trimStart + 1.2)
         val totalWindow = (trimEnd - trimStart).coerceAtLeast(1.2)
+
+        // First check if a registered synchronous/local ASR engine or sidecar SRT exists for this video
+        val localVideoFile = resolveLocalVideoFile(project.source)
+        if (localVideoFile != null) {
+            val baseNoExt = localVideoFile.absolutePath.substringBeforeLast('.')
+            val sidecar = listOf(
+                File("${baseNoExt}.${langCode}.srt"),
+                File("${baseNoExt}.srt")
+            ).firstOrNull { it.exists() && it.length() > 16L }
+            if (sidecar != null) {
+                val parsed = SrtParser.parseSrt(sidecar.readText(Charsets.UTF_8))
+                    .filter { it.end >= trimStart && it.start <= trimEnd }
+                    .mapIndexed { idx, c ->
+                        c.copy(
+                            id = "asr_sidecar_${idx + 1}",
+                            isDemoSubtitle = false,
+                            transcriptionSource = "asr_sidecar_srt"
+                        )
+                    }
+                if (parsed.isNotEmpty()) {
+                    return applyTranscribedCuesToProject(
+                        project = project,
+                        langCode = langCode,
+                        cues = parsed,
+                        sourceId = "asr_sidecar_srt",
+                        isDemo = false
+                    )
+                }
+            }
+        }
 
         val scriptLines: List<String> = when (langCode) {
             "fa", "prs" -> listOf(
@@ -429,7 +648,7 @@ class ProjectRepository(private val context: Context) {
         val selectedLines = scriptLines.take(targetCueCount)
         val segDuration = totalWindow / selectedLines.size
 
-        val generatedCues = selectedLines.mapIndexed { idx, line ->
+        val generatedDemoCues = selectedLines.mapIndexed { idx, line ->
             val cueStart = ((trimStart + idx * segDuration) * 100.0).toInt() / 100.0
             val cueEnd = ((cueStart + segDuration - 0.08).coerceAtMost(trimEnd) * 100.0).toInt() / 100.0
             val rawWords = SrtParser.buildWordTimings(line, cueStart, max(cueStart + 0.3, cueEnd))
@@ -453,43 +672,27 @@ class ProjectRepository(private val context: Context) {
             val t2 = tieredWords.filter { it.tier == 2 }.joinToString(" ") { it.text }
             val t3 = tieredWords.filter { it.tier == 3 }.joinToString(" ") { it.text }
             CaptionCue(
-                id = "asr_${langCode}_${idx + 1}",
+                id = "demo_${langCode}_${idx + 1}",
                 start = cueStart,
                 end = max(cueStart + 0.3, cueEnd),
-                text = line,
+                text = "[DEMO] $line",
                 tier1Text = t1,
                 tier2Text = t2,
                 tier3Text = t3,
                 entranceSfx = "Fast Whoosh",
-                words = tieredWords
+                words = tieredWords,
+                isDemoSubtitle = true,
+                transcriptionSource = "demo_template"
             )
         }
 
-        val defaultFont = when (langCode) {
-            "ur" -> "Noto Nastaliq Urdu"
-            "fa", "prs", "ps", "ar" -> "Vazirmatn"
-            else -> "Montserrat"
-        }
-
-        val existingTrack = project.tracks.firstOrNull()
-        val updatedFirstTrack = (existingTrack ?: Track(
-            id = "tr_orig",
-            name = "Original (${langCode.uppercase()})",
-            language = langCode
-        )).copy(
-            name = "Original (${langCode.uppercase()})",
-            language = langCode,
-            style = (existingTrack?.style ?: SubtitleStyle()).copy(font = defaultFont),
-            captions = generatedCues
+        return applyTranscribedCuesToProject(
+            project = project,
+            langCode = langCode,
+            cues = generatedDemoCues,
+            sourceId = "demo_template",
+            isDemo = true
         )
-
-        val updatedTracks = if (project.tracks.isEmpty()) {
-            listOf(updatedFirstTrack)
-        } else {
-            project.tracks.toMutableList().apply { this[0] = updatedFirstTrack }
-        }
-
-        return saveLocalProject(project.copy(tracks = updatedTracks))
     }
 
     suspend fun runBackendTranslation(

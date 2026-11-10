@@ -45,23 +45,29 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.captionforge.android.model.CaptionCue
+import com.captionforge.android.model.CaptionTierStyle
 import com.captionforge.android.model.GraphicOverlay
 import com.captionforge.android.model.OverlayKeyframe
 import com.captionforge.android.model.Project
+import com.captionforge.android.model.RtlTextShaper
 import com.captionforge.android.model.SubtitleStyle
 import com.captionforge.android.model.Track
 import com.captionforge.android.ui.theme.AppColors
@@ -90,7 +96,11 @@ fun SubtitleOverlayCanvas(
     onDragOverlayPosition: ((String, Double, Double) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("caption_layer_canvas")
+    ) {
         val canvasWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val canvasHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
 
@@ -110,7 +120,7 @@ fun SubtitleOverlayCanvas(
             )
         }
 
-        // 2. Active Subtitle Tracks (Up to 5 simultaneous tracks)
+        // 2. Active Subtitle Tracks (captionLayer — up to 5 simultaneous tracks)
         project.tracks.filter { it.visible }.forEach { track ->
             val earlyOffset = track.style.early
             val activeCue = track.captions.firstOrNull { cue ->
@@ -182,7 +192,11 @@ private fun ActiveTrackSubtitleItem(
     val style = cue.customStyle ?: track.style
     val fontFamily = resolveSubtitleFontFamily(style.font)
     val fontWeight = resolveComposeFontWeight(style.fontWeight)
-    val rtl = isRtlScript(cue.text) || track.language in listOf("fa", "ps", "ur", "ar")
+    val rtl = isRtlScript(cue.text) ||
+        isRtlScript(cue.tier1Text) ||
+        isRtlScript(cue.tier2Text) ||
+        isRtlScript(cue.tier3Text) ||
+        track.language in listOf("fa", "ps", "ur", "ar")
 
     // Interpolate cue keyframes if present
     val kfState = interpolateKeyframes(
@@ -313,10 +327,9 @@ private fun ActiveTrackSubtitleItem(
                     ThreeTierKineticSubtitleContent(
                         cue = cue,
                         style = style,
-                        fontFamily = fontFamily,
-                        fontWeight = fontWeight,
                         baseFontSize = scaledFontSize,
-                        currentTime = currentTime
+                        currentTime = currentTime,
+                        isRtl = rtl
                     )
                 } else if (style.karaoke && cue.words.isNotEmpty()) {
                     val activeWords = if (style.oneLine) {
@@ -336,7 +349,10 @@ private fun ActiveTrackSubtitleItem(
                         activeWords.forEach { word ->
                             val isActiveWord = currentTime >= word.start && currentTime <= word.end
                             val isPastWord = currentTime > word.end
-                            val wordText = applyTextTransform(word.text, style.textTransform)
+                            val wordText = RtlTextShaper.shapeLineForRtlDisplay(
+                                applyTextTransform(word.text, style.textTransform),
+                                forceRtl = rtl
+                            )
                             val wordScale = if (isActiveWord) {
                                 (word.scaleBoost.toFloat() * 1.14f).coerceIn(1.0f, 1.75f)
                             } else {
@@ -367,19 +383,21 @@ private fun ActiveTrackSubtitleItem(
                                     fontSize = scaledFontSize,
                                     fillColor = wordColor,
                                     style = style,
-                                    useGradient = isActiveWord && style.gradient
+                                    useGradient = isActiveWord && style.gradient,
+                                    isRtl = rtl
                                 )
                             }
                         }
                     }
                 } else {
-                    val displayText = if (style.animation.equals("Typewriter", ignoreCase = true)) {
+                    val rawText = if (style.animation.equals("Typewriter", ignoreCase = true)) {
                         val totalProgress = ((currentTime - cue.start) / cue.duration).coerceIn(0.05, 1.0)
                         val count = (cue.text.length * totalProgress).toInt().coerceAtLeast(1)
                         applyTextTransform(cue.text.take(count), style.textTransform)
                     } else {
                         applyTextTransform(cue.text, style.textTransform)
                     }
+                    val displayText = RtlTextShaper.shapeLineForRtlDisplay(rawText, forceRtl = rtl)
 
                     StyledLayeredText(
                         text = displayText,
@@ -388,7 +406,8 @@ private fun ActiveTrackSubtitleItem(
                         fontSize = scaledFontSize,
                         fillColor = parseHexColor(style.textColor),
                         style = style,
-                        useGradient = style.gradient
+                        useGradient = style.gradient,
+                        isRtl = rtl
                     )
                 }
             }
@@ -397,37 +416,41 @@ private fun ActiveTrackSubtitleItem(
 }
 
 /**
- * Recreates Reference Video 1's signature 3-Tier Persian Orange Kinetic Typography:
- * - Tier 1 (Top): Crisp white supporting line (e.g., "ویزای تحصیلی" / "ویزه خانم")
- * - Tier 2 (Center Hero): Massive (2.0x) orange-gold gradient Persian display headline
- *   ("فنلاند" / "نازیــــه") with deep 3D dark extrusion stack, heavy stroke, warm bloom,
- *   and sweeping Optical Purple Anamorphic Lens Flare
- * - Tier 3 (Bottom): Crisp white supporting line tucked closely below Tier 2 ("بدون مدرک زبان" / "است")
+ * Recreates Reference Video 1's signature 3-Tier Persian Orange Kinetic Typography in `captionLayer`:
+ * - Tier 1 (Top Sub-Headline): Crisp white supporting line (e.g., "ویزای تحصیلی" / "ویزه خانم")
+ *   with its own distinct stroke, tight drop-shadow, and subtle inner luminance.
+ * - Tier 2 (Center Hero Headline): Massive (~2.0x) orange-gold gradient Persian display headline
+ *   ("فنلاند" / "نازیــــه") with deep 3D dark extrusion stack, heavy rounded stroke, warm outer bloom,
+ *   golden-white inner core glow, and sweeping Optical Purple Anamorphic Lens Flare.
+ * - Tier 3 (Bottom Sub-Headline): Crisp white supporting line tucked closely below Tier 2
+ *   ("بدون مدرک زبان" / "است") with distinct sub-headline stroke, shadow, and inner glow.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ThreeTierKineticSubtitleContent(
     cue: CaptionCue,
     style: SubtitleStyle,
-    fontFamily: FontFamily,
-    fontWeight: FontWeight,
     baseFontSize: TextUnit,
-    currentTime: Double
+    currentTime: Double,
+    isRtl: Boolean
 ) {
-    val (tier1, tier2, tier3) = cue.resolveThreeTiers()
-    val tier1Size = (baseFontSize.value * 0.88f).sp
-    val tier2HeroSize = (baseFontSize.value * 1.96f).sp
-    val tier3Size = (baseFontSize.value * 0.92f).sp
+    val (tier1Raw, tier2Raw, tier3Raw) = cue.resolveThreeTiers(normalizeRtl = true)
+    val tier1Style = style.resolveTierLayerStyle(1)
+    val tier2Style = style.resolveTierLayerStyle(2)
+    val tier3Style = style.resolveTierLayerStyle(3)
 
-    val heroFontFamily = if (style.font.equals("Vazirmatn", ignoreCase = true) || style.font.equals("Lalezar", ignoreCase = true)) {
-        LalezarFontFamily
-    } else {
-        fontFamily
-    }
+    val tier1Size = (baseFontSize.value * tier1Style.fontScale.toFloat()).sp
+    val tier2HeroSize = (baseFontSize.value * tier2Style.fontScale.toFloat()).sp
+    val tier3Size = (baseFontSize.value * tier3Style.fontScale.toFloat()).sp
+
+    val tier1FontFamily = resolveSubtitleFontFamily(tier1Style.fontFamily)
+    val heroFontFamily = resolveSubtitleFontFamily(tier2Style.fontFamily)
+    val tier3FontFamily = resolveSubtitleFontFamily(tier3Style.fontFamily)
 
     val relProgress = ((currentTime - cue.start) / cue.duration).coerceIn(0.0, 1.0).toFloat()
     val activeHeroWord = cue.words.firstOrNull { w ->
-        (w.tier == 2 || w.text == tier2) && currentTime >= w.start && currentTime <= w.end
+        (w.tier == 2 || RtlTextShaper.normalizePersianText(w.text) == tier2Raw) &&
+            currentTime >= w.start && currentTime <= w.end
     }
     val heroPulse = if (activeHeroWord != null) {
         val wProg = ((currentTime - activeHeroWord.start) / (activeHeroWord.end - activeHeroWord.start).coerceAtLeast(0.15)).coerceIn(0.0, 1.0).toFloat()
@@ -436,50 +459,53 @@ private fun ThreeTierKineticSubtitleContent(
         1.0f + 0.05f * sin(relProgress * PI.toFloat())
     }
 
+    val tierHorizontalAlignment = when (style.align.lowercase()) {
+        "left" -> if (isRtl) Alignment.End else Alignment.Start
+        "right" -> if (isRtl) Alignment.Start else Alignment.End
+        else -> Alignment.CenterHorizontally
+    }
+
     Box(contentAlignment = Alignment.Center) {
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalAlignment = tierHorizontalAlignment,
             verticalArrangement = Arrangement.spacedBy((-6).dp),
             modifier = Modifier.widthIn(max = 340.dp)
         ) {
-            // Tier 1: Top White Supporting Line
-            if (tier1.isNotBlank()) {
-                StyledLayeredText(
-                    text = applyTextTransform(tier1, style.textTransform),
-                    fontFamily = fontFamily,
-                    fontWeight = FontWeight.ExtraBold,
+            // Tier 1: Top Sub-Headline with distinct sub-headline stroke, drop-shadow, and inner glow
+            if (tier1Raw.isNotBlank()) {
+                val shapedT1 = RtlTextShaper.shapeLineForRtlDisplay(
+                    applyTextTransform(tier1Raw, style.textTransform),
+                    forceRtl = isRtl
+                )
+                CaptionTierLayeredText(
+                    text = shapedT1,
+                    tierStyle = tier1Style,
+                    parentStyle = style,
+                    fontFamily = tier1FontFamily,
+                    fontWeight = resolveComposeFontWeight(tier1Style.fontWeight),
                     fontSize = tier1Size,
-                    fillColor = parseHexColor(style.tier1Color),
-                    style = style.copy(
-                        extrusion3D = 2.0,
-                        outline = max(3.2, style.outline * 0.85),
-                        glow = 0.0
-                    ),
-                    useGradient = false,
-                    isHeroTier = false
+                    isRtl = isRtl
                 )
             }
 
-            // Tier 2: Massive Hero Orange-Gold 3D Headline + Optical Purple Lens Flare
-            if (tier2.isNotBlank()) {
+            // Tier 2: Massive Hero Orange-Gold 3D Persian Headline + Inner Glow + Optical Purple Lens Flare
+            if (tier2Raw.isNotBlank()) {
+                val shapedT2 = RtlTextShaper.shapeLineForRtlDisplay(
+                    applyTextTransform(tier2Raw, style.textTransform),
+                    forceRtl = isRtl
+                )
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier.scale(heroPulse)
                 ) {
-                    StyledLayeredText(
-                        text = applyTextTransform(tier2, style.textTransform),
+                    CaptionTierLayeredText(
+                        text = shapedT2,
+                        tierStyle = tier2Style,
+                        parentStyle = style,
                         fontFamily = heroFontFamily,
                         fontWeight = FontWeight.Black,
                         fontSize = tier2HeroSize,
-                        fillColor = parseHexColor(style.tier2Color),
-                        style = style.copy(
-                            textColor = style.tier2Color,
-                            extrusion3D = max(5.5, style.extrusion3D),
-                            outline = max(4.5, style.outline),
-                            glow = max(7.0, style.glow)
-                        ),
-                        useGradient = true,
-                        isHeroTier = true
+                        isRtl = isRtl
                     )
 
                     // Sweeping Optical Purple Anamorphic Lens Flare during hero emphasis
@@ -498,8 +524,8 @@ private fun ThreeTierKineticSubtitleContent(
                 }
             }
 
-            // Tier 3: Bottom Crisp White Supporting Line (with active word highlight)
-            if (tier3.isNotBlank()) {
+            // Tier 3: Bottom Sub-Headline with distinct sub-headline stroke, drop-shadow, inner glow & word highlight
+            if (tier3Raw.isNotBlank()) {
                 val tier3Words = cue.words.filter { it.tier == 3 }
                 if (tier3Words.isNotEmpty() && style.karaoke) {
                     FlowRow(
@@ -508,47 +534,55 @@ private fun ThreeTierKineticSubtitleContent(
                     ) {
                         tier3Words.forEach { w ->
                             val active = currentTime >= w.start && currentTime <= w.end
-                            val c = when {
-                                active -> parseHexColor(w.customColor ?: "#FFB800")
-                                w.customColor != null -> parseHexColor(w.customColor)
-                                else -> parseHexColor(style.tier3Color)
+                            val wordHex = when {
+                                active -> w.customColor ?: "#FFB800"
+                                w.customColor != null -> w.customColor
+                                else -> tier3Style.fillColor
                             }
+                            val wordTierStyle = if (active) {
+                                tier3Style.copy(
+                                    fillColor = wordHex,
+                                    useGradient = style.gradient,
+                                    outerGlowRadius = 4.0,
+                                    innerGlowRadius = max(2.4, tier3Style.innerGlowRadius * 1.35)
+                                )
+                            } else {
+                                tier3Style.copy(fillColor = wordHex)
+                            }
+                            val shapedWord = RtlTextShaper.shapeLineForRtlDisplay(
+                                applyTextTransform(w.text, style.textTransform),
+                                forceRtl = isRtl
+                            )
                             Box(
                                 modifier = Modifier
                                     .padding(horizontal = 2.dp)
                                     .scale(if (active) 1.12f else 1.0f)
                             ) {
-                                StyledLayeredText(
-                                    text = applyTextTransform(w.text, style.textTransform),
-                                    fontFamily = fontFamily,
-                                    fontWeight = if (active) FontWeight.Black else FontWeight.ExtraBold,
+                                CaptionTierLayeredText(
+                                    text = shapedWord,
+                                    tierStyle = wordTierStyle,
+                                    parentStyle = style,
+                                    fontFamily = tier3FontFamily,
+                                    fontWeight = if (active) FontWeight.Black else resolveComposeFontWeight(tier3Style.fontWeight),
                                     fontSize = tier3Size,
-                                    fillColor = c,
-                                    style = style.copy(
-                                        extrusion3D = 2.0,
-                                        outline = max(3.2, style.outline * 0.85),
-                                        glow = if (active) 4.0 else 0.0
-                                    ),
-                                    useGradient = active && style.gradient,
-                                    isHeroTier = false
+                                    isRtl = isRtl
                                 )
                             }
                         }
                     }
                 } else {
-                    StyledLayeredText(
-                        text = applyTextTransform(tier3, style.textTransform),
-                        fontFamily = fontFamily,
-                        fontWeight = FontWeight.ExtraBold,
+                    val shapedT3 = RtlTextShaper.shapeLineForRtlDisplay(
+                        applyTextTransform(tier3Raw, style.textTransform),
+                        forceRtl = isRtl
+                    )
+                    CaptionTierLayeredText(
+                        text = shapedT3,
+                        tierStyle = tier3Style,
+                        parentStyle = style,
+                        fontFamily = tier3FontFamily,
+                        fontWeight = resolveComposeFontWeight(tier3Style.fontWeight),
                         fontSize = tier3Size,
-                        fillColor = parseHexColor(style.tier3Color),
-                        style = style.copy(
-                            extrusion3D = 2.0,
-                            outline = max(3.2, style.outline * 0.85),
-                            glow = 0.0
-                        ),
-                        useGradient = false,
-                        isHeroTier = false
+                        isRtl = isRtl
                     )
                 }
             }
@@ -607,11 +641,184 @@ private fun OpticalPurpleLensFlareCanvas(
 }
 
 /**
- * Renders multi-layer studio typography with:
- * 1. Soft dark ambient drop shadow for instant legibility over bright footage
- * 2. 3D Extrusion depth stack (`extrusion3D`)
- * 3. True vector stroke outline (`outline` + `outlineColor`)
- * 4. Multi-stop vertical orange-gold gradient fill (`secondaryColor` top -> `textColor` mid -> `tertiaryColor` bottom)
+ * 5-Layer Per-Component Persian Cinema Typography Renderer (`CaptionTierLayeredText`):
+ * 1. Distinct Drop-Shadow Pass (`dropShadowDepth`, `dropShadowBlur`, `dropShadowColor`)
+ * 2. 3D Sculptural Extrusion Stack (`extrusion3D`, `extrusionColor`)
+ * 3. Distinct Round-Join Vector Stroke Pass (`strokeWidth`, `strokeColor`)
+ * 4. Primary Fill / Vertical 3-Stop Gradient + Outer Bloom Pass
+ * 5. Distinct Inner Glow / Specular Core Highlight Pass (`innerGlowRadius`, `innerGlowColor`, `innerGlowAlpha`)
+ */
+@Composable
+private fun CaptionTierLayeredText(
+    text: String,
+    tierStyle: CaptionTierStyle,
+    parentStyle: SubtitleStyle,
+    fontFamily: FontFamily,
+    fontWeight: FontWeight,
+    fontSize: TextUnit,
+    isRtl: Boolean
+) {
+    val isHeroTier = tierStyle.tierIndex == 2
+    val textAlign = when (parentStyle.align.lowercase()) {
+        "left" -> TextAlign.Left
+        "right" -> TextAlign.Right
+        else -> TextAlign.Center
+    }
+    val textDirection = if (isRtl || RtlTextShaper.containsRtl(text)) {
+        TextDirection.Rtl
+    } else {
+        TextDirection.ContentOrLtr
+    }
+
+    val strokeColor = parseHexColor(tierStyle.strokeColor)
+    val extrusionBaseColor = parseHexColor(tierStyle.extrusionColor)
+    val dropShadowColor = parseHexColor(tierStyle.dropShadowColor)
+    val dropShadowOffsetPx = (tierStyle.dropShadowDepth * 1.25).toFloat()
+    val dropShadowBlurPx = (tierStyle.dropShadowBlur * 1.85).toFloat().coerceAtLeast(1f)
+
+    Box(contentAlignment = Alignment.Center) {
+        // Pass 1: Distinct Component Drop-Shadow Pass for instant separation over bright video regions
+        if (tierStyle.dropShadowDepth > 0.1 || tierStyle.dropShadowBlur > 0.1) {
+            Text(
+                text = text,
+                fontFamily = fontFamily,
+                fontWeight = fontWeight,
+                fontSize = fontSize,
+                color = Color.Transparent,
+                textAlign = textAlign,
+                letterSpacing = parentStyle.letterSpacing.sp,
+                lineHeight = (fontSize.value * parentStyle.lineSpacing).sp,
+                style = TextStyle(
+                    textDirection = textDirection,
+                    shadow = Shadow(
+                        color = dropShadowColor.copy(alpha = 0.88f),
+                        offset = Offset(dropShadowOffsetPx * 0.45f, dropShadowOffsetPx),
+                        blurRadius = dropShadowBlurPx
+                    )
+                )
+            )
+        }
+
+        // Pass 2: 3D Extrusion Stack (deep sculptural dark-mahogany/obsidian steps)
+        val depthSteps = tierStyle.extrusion3D.roundToInt().coerceIn(0, 8)
+        for (step in depthSteps downTo 1) {
+            Text(
+                text = text,
+                fontFamily = fontFamily,
+                fontWeight = fontWeight,
+                fontSize = fontSize,
+                color = if (isHeroTier && step <= 2) extrusionBaseColor else strokeColor.copy(alpha = 0.96f),
+                textAlign = textAlign,
+                letterSpacing = parentStyle.letterSpacing.sp,
+                lineHeight = (fontSize.value * parentStyle.lineSpacing).sp,
+                style = TextStyle(textDirection = textDirection),
+                modifier = Modifier.offset {
+                    IntOffset((step * 1.55f).roundToInt(), (step * 2.35f).roundToInt())
+                }
+            )
+        }
+
+        // Pass 3: Distinct Component Vector Stroke Outline (Round Join & Cap for Persian dots/curves)
+        if (tierStyle.strokeWidth > 0.2) {
+            Text(
+                text = text,
+                fontFamily = fontFamily,
+                fontWeight = fontWeight,
+                fontSize = fontSize,
+                color = strokeColor,
+                textAlign = textAlign,
+                letterSpacing = parentStyle.letterSpacing.sp,
+                lineHeight = (fontSize.value * parentStyle.lineSpacing).sp,
+                style = TextStyle(
+                    textDirection = textDirection,
+                    drawStyle = Stroke(
+                        width = (tierStyle.strokeWidth * (if (isHeroTier) 2.55 else 2.05)).toFloat().coerceIn(2f, 18f),
+                        join = StrokeJoin.Round,
+                        cap = StrokeCap.Round
+                    )
+                )
+            )
+        }
+
+        // Pass 4: Primary Fill (Vertical 3-Stop Gold-to-Orange Gradient or Crisp Solid Fill) + Outer Glow
+        val fillColor = parseHexColor(tierStyle.fillColor)
+        val outerGlowShadow = if (tierStyle.outerGlowRadius > 0.2) {
+            Shadow(
+                color = parseHexColor(tierStyle.outerGlowColor).copy(alpha = 0.82f),
+                offset = Offset.Zero,
+                blurRadius = (tierStyle.outerGlowRadius * 3.1).toFloat().coerceAtLeast(2f)
+            )
+        } else {
+            Shadow(
+                color = dropShadowColor.copy(alpha = 0.80f),
+                offset = Offset(dropShadowOffsetPx * 0.35f, dropShadowOffsetPx * 0.75f),
+                blurRadius = (dropShadowBlurPx * 0.7f).coerceAtLeast(2f)
+            )
+        }
+
+        val fgTextStyle = if (tierStyle.useGradient) {
+            val topCol = parseHexColor(tierStyle.secondaryColor)
+            val midCol = fillColor
+            val botCol = parseHexColor(tierStyle.tertiaryColor)
+            TextStyle(
+                textDirection = textDirection,
+                brush = Brush.verticalGradient(
+                    colors = listOf(topCol, midCol, botCol)
+                ),
+                shadow = outerGlowShadow
+            )
+        } else {
+            TextStyle(
+                textDirection = textDirection,
+                color = fillColor,
+                shadow = outerGlowShadow
+            )
+        }
+
+        Text(
+            text = text,
+            fontFamily = fontFamily,
+            fontWeight = fontWeight,
+            fontSize = fontSize,
+            textAlign = textAlign,
+            letterSpacing = parentStyle.letterSpacing.sp,
+            lineHeight = (fontSize.value * parentStyle.lineSpacing).sp,
+            style = fgTextStyle
+        )
+
+        // Pass 5: Distinct Inner Glow / Specular Core Luminance Pass
+        if (tierStyle.innerGlowRadius > 0.2 && tierStyle.innerGlowAlpha > 0.05) {
+            val innerGlowCol = parseHexColor(tierStyle.innerGlowColor)
+                .copy(alpha = tierStyle.innerGlowAlpha.toFloat().coerceIn(0.08f, 0.85f))
+            Text(
+                text = text,
+                fontFamily = fontFamily,
+                fontWeight = fontWeight,
+                fontSize = fontSize,
+                color = innerGlowCol.copy(alpha = (tierStyle.innerGlowAlpha.toFloat() * 0.42f).coerceIn(0.05f, 0.55f)),
+                textAlign = textAlign,
+                letterSpacing = parentStyle.letterSpacing.sp,
+                lineHeight = (fontSize.value * parentStyle.lineSpacing).sp,
+                style = TextStyle(
+                    textDirection = textDirection,
+                    drawStyle = Stroke(
+                        width = (tierStyle.innerGlowRadius * 0.65).toFloat().coerceIn(0.8f, 3.8f),
+                        join = StrokeJoin.Round,
+                        cap = StrokeCap.Round
+                    ),
+                    shadow = Shadow(
+                        color = innerGlowCol,
+                        offset = Offset(0f, -0.8f),
+                        blurRadius = (tierStyle.innerGlowRadius * 1.9).toFloat().coerceAtLeast(1.5f)
+                    )
+                )
+            )
+        }
+    }
+}
+
+/**
+ * General single-tier / word-chip layered text renderer delegating to `CaptionTierLayeredText`.
  */
 @Composable
 private fun StyledLayeredText(
@@ -622,101 +829,47 @@ private fun StyledLayeredText(
     fillColor: Color,
     style: SubtitleStyle,
     useGradient: Boolean,
-    isHeroTier: Boolean = false
+    isHeroTier: Boolean = false,
+    isRtl: Boolean = isRtlScript(text)
 ) {
-    val textAlign = when (style.align.lowercase()) {
-        "left" -> TextAlign.Left
-        "right" -> TextAlign.Right
-        else -> TextAlign.Center
-    }
-    val outlineColor = parseHexColor(style.outlineColor)
-    val shadowColor = if (style.glow > 0.2) {
-        parseHexColor(style.glowColor)
-    } else {
-        parseHexColor(style.shadowColor)
-    }
-    val shadowBlurPx = if (style.glow > 0.2) {
-        (style.glow * 3.0).toFloat()
-    } else {
-        (style.shadowBlur * 1.8).toFloat()
-    }
-    val shadowOffsetPx = (style.shadowDepth * 1.2).toFloat()
-
-    Box(contentAlignment = Alignment.Center) {
-        // Layer 1: 3D Extrusion Stack (deep sculptural dark-brown/black shadow steps)
-        val depthSteps = style.extrusion3D.roundToInt().coerceIn(0, 8)
-        for (step in depthSteps downTo 1) {
-            Text(
-                text = text,
-                fontFamily = fontFamily,
-                fontWeight = fontWeight,
-                fontSize = fontSize,
-                color = if (isHeroTier && step <= 2) Color(0xFF441404) else outlineColor.copy(alpha = 0.96f),
-                textAlign = textAlign,
-                letterSpacing = style.letterSpacing.sp,
-                lineHeight = (fontSize.value * style.lineSpacing).sp,
-                modifier = Modifier.offset {
-                    IntOffset((step * 1.6f).roundToInt(), (step * 2.4f).roundToInt())
-                }
-            )
-        }
-
-        // Layer 2: Crisp Vector Stroke Outline
-        if (style.outline > 0.2) {
-            Text(
-                text = text,
-                fontFamily = fontFamily,
-                fontWeight = fontWeight,
-                fontSize = fontSize,
-                color = outlineColor,
-                textAlign = textAlign,
-                letterSpacing = style.letterSpacing.sp,
-                lineHeight = (fontSize.value * style.lineSpacing).sp,
-                style = TextStyle.Default.copy(
-                    drawStyle = Stroke(
-                        width = (style.outline * (if (isHeroTier) 2.6 else 2.1)).toFloat().coerceIn(2f, 16f)
-                    )
-                )
-            )
-        }
-
-        // Layer 3: Foreground Vertical Orange-Gold Gradient or Solid Fill + Glow/Shadow
-        val fgTextStyle = if (useGradient) {
-            val topCol = if (isHeroTier) parseHexColor(style.secondaryColor) else parseHexColor(style.textColor)
-            val midCol = parseHexColor(style.textColor)
-            val botCol = parseHexColor(style.tertiaryColor)
-            TextStyle(
-                brush = Brush.verticalGradient(
-                    colors = listOf(topCol, midCol, botCol)
-                ),
-                shadow = Shadow(
-                    color = shadowColor,
-                    offset = Offset(shadowOffsetPx, shadowOffsetPx),
-                    blurRadius = shadowBlurPx.coerceAtLeast(1f)
-                )
-            )
-        } else {
-            TextStyle(
-                color = fillColor,
-                shadow = Shadow(
-                    color = Color.Black.copy(alpha = 0.85f),
-                    offset = Offset(2f, 4f),
-                    blurRadius = 8f
-                )
-            )
-        }
-
-        Text(
-            text = text,
-            fontFamily = fontFamily,
-            fontWeight = fontWeight,
-            fontSize = fontSize,
-            textAlign = textAlign,
-            letterSpacing = style.letterSpacing.sp,
-            lineHeight = (fontSize.value * style.lineSpacing).sp,
-            style = fgTextStyle
-        )
-    }
+    val hexFill = String.format(
+        Locale.US,
+        "#%02X%02X%02X",
+        (fillColor.red * 255).roundToInt().coerceIn(0, 255),
+        (fillColor.green * 255).roundToInt().coerceIn(0, 255),
+        (fillColor.blue * 255).roundToInt().coerceIn(0, 255)
+    )
+    val tierStyle = CaptionTierStyle(
+        tierIndex = if (isHeroTier) 2 else 1,
+        fontFamily = style.font,
+        fontWeight = style.fontWeight,
+        fontScale = 1.0,
+        fillColor = hexFill,
+        secondaryColor = style.secondaryColor,
+        tertiaryColor = style.tertiaryColor,
+        useGradient = useGradient,
+        strokeWidth = style.outline,
+        strokeColor = style.outlineColor,
+        dropShadowDepth = style.shadowDepth,
+        dropShadowBlur = style.shadowBlur,
+        dropShadowColor = style.shadowColor,
+        extrusion3D = style.extrusion3D,
+        extrusionColor = if (isHeroTier) "#3B1104" else "#110C1D",
+        outerGlowRadius = style.glow,
+        outerGlowColor = style.glowColor,
+        innerGlowRadius = if (isHeroTier) style.headlineInnerGlow else style.subHeadlineInnerGlow * 0.6,
+        innerGlowColor = if (isHeroTier) style.headlineInnerGlowColor else style.subHeadlineInnerGlowColor,
+        innerGlowAlpha = if (isHeroTier) 0.55 else 0.28
+    )
+    CaptionTierLayeredText(
+        text = text,
+        tierStyle = tierStyle,
+        parentStyle = style,
+        fontFamily = fontFamily,
+        fontWeight = fontWeight,
+        fontSize = fontSize,
+        isRtl = isRtl
+    )
 }
 
 private data class InterpolatedTransform(

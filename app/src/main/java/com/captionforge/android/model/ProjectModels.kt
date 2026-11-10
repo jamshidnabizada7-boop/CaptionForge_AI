@@ -31,51 +31,139 @@ data class CaptionCue(
     val customStyle: SubtitleStyle? = null,
     val entranceSfx: String = "None",
     val exitSfx: String = "None",
-    val keyframes: List<OverlayKeyframe> = emptyList()
+    val keyframes: List<OverlayKeyframe> = emptyList(),
+    val isDemoSubtitle: Boolean = false,
+    val transcriptionSource: String = "manual" // "asr_faster_whisper", "asr_local_engine", "demo_template", "srt_import", "manual"
 ) {
     val duration: Double get() = max(0.05, end - start)
 
     /**
      * Resolves the 3-tier hierarchical text structure used by Reference Video 1's
-     * Orange Persian Kinetic template (Tier 1: Top white supporting kicker,
-     * Tier 2: Large bold orange-amber hero word/phrase, Tier 3: Bottom white/gold phrase).
+     * Orange Persian Kinetic template (Tier 1: Top white supporting sub-headline,
+     * Tier 2: Large bold orange-amber hero headline, Tier 3: Bottom white/gold sub-headline).
+     * Applies RTL normalization and BiDi shaping preservation to each tier.
      */
-    fun resolveThreeTiers(): Triple<String, String, String> {
-        if (tier1Text.isNotBlank() || tier2Text.isNotBlank() || tier3Text.isNotBlank()) {
-            val t2 = tier2Text.ifBlank { text }
-            return Triple(tier1Text, t2, tier3Text)
-        }
-        val explicitTiers = words.any { it.tier in 1..3 }
-        if (explicitTiers) {
+    fun resolveThreeTiers(normalizeRtl: Boolean = true): Triple<String, String, String> {
+        val cleanText = text.removePrefix("[DEMO] ").trim()
+        val rawTriple = if (tier1Text.isNotBlank() || tier2Text.isNotBlank() || tier3Text.isNotBlank()) {
+            val t2 = tier2Text.ifBlank { cleanText }
+            Triple(tier1Text, t2, tier3Text)
+        } else if (words.any { it.tier in 1..3 }) {
             val t1 = words.filter { it.tier == 1 }.joinToString(" ") { it.text }
             val t2 = words.filter { it.tier == 2 || it.tier == 0 }.joinToString(" ") { it.text }
             val t3 = words.filter { it.tier == 3 }.joinToString(" ") { it.text }
-            return Triple(t1, t2.ifBlank { text }, t3)
-        }
-        val lines = text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
-        if (lines.size >= 3) {
-            return Triple(lines[0], lines[1], lines.drop(2).joinToString(" "))
-        }
-        if (lines.size == 2) {
-            return Triple(lines[0], lines[1], "")
-        }
-        val tokens = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-        return when {
-            tokens.size >= 5 -> {
-                val t1 = tokens.take(2).joinToString(" ")
-                val t2 = tokens.drop(2).take(max(1, tokens.size - 4)).joinToString(" ")
-                val t3 = tokens.takeLast(2).joinToString(" ")
-                Triple(t1, t2, t3)
+            Triple(t1, t2.ifBlank { cleanText }, t3)
+        } else {
+            val lines = cleanText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+            when {
+                lines.size >= 3 -> Triple(lines[0], lines[1], lines.drop(2).joinToString(" "))
+                lines.size == 2 -> Triple(lines[0], lines[1], "")
+                else -> {
+                    val tokens = cleanText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+                    when {
+                        tokens.size >= 5 -> {
+                            val t1 = tokens.take(2).joinToString(" ")
+                            val t2 = tokens.drop(2).take(max(1, tokens.size - 4)).joinToString(" ")
+                            val t3 = tokens.takeLast(2).joinToString(" ")
+                            Triple(t1, t2, t3)
+                        }
+                        tokens.size == 4 -> Triple(
+                            tokens.take(1).joinToString(" "),
+                            tokens.drop(1).take(2).joinToString(" "),
+                            tokens.takeLast(1).joinToString(" ")
+                        )
+                        tokens.size == 3 -> Triple(tokens[0], tokens[1], tokens[2])
+                        tokens.size == 2 -> Triple(tokens[0], tokens[1], "")
+                        else -> Triple("", text.trim(), "")
+                    }
+                }
             }
-            tokens.size == 4 -> Triple(
-                tokens.take(1).joinToString(" "),
-                tokens.drop(1).take(2).joinToString(" "),
-                tokens.takeLast(1).joinToString(" ")
-            )
-            tokens.size == 3 -> Triple(tokens[0], tokens[1], tokens[2])
-            tokens.size == 2 -> Triple(tokens[0], tokens[1], "")
-            else -> Triple("", text.trim(), "")
         }
+        if (!normalizeRtl) return rawTriple
+        return Triple(
+            RtlTextShaper.normalizePersianText(rawTriple.first),
+            RtlTextShaper.normalizePersianText(rawTriple.second),
+            RtlTextShaper.normalizePersianText(rawTriple.third)
+        )
+    }
+}
+
+/**
+ * Defines distinct layered text effects (stroke, drop-shadow, 3D extrusion, outer bloom,
+ * and inner glow) for an individual tier in the 3-tier Persian cinematic captionLayer.
+ */
+@Serializable
+data class CaptionTierStyle(
+    val tierIndex: Int = 2, // 1 = Top Sub-Headline, 2 = Hero Center Headline, 3 = Bottom Sub-Headline
+    val fontFamily: String = "Lalezar",
+    val fontWeight: Int = 900,
+    val fontScale: Double = 1.0,
+    val fillColor: String = "#FF7A00",
+    val secondaryColor: String = "#FFB800",
+    val tertiaryColor: String = "#D93800",
+    val useGradient: Boolean = true,
+    val strokeWidth: Double = 4.5,
+    val strokeColor: String = "#090612",
+    val dropShadowDepth: Double = 6.0,
+    val dropShadowBlur: Double = 10.0,
+    val dropShadowColor: String = "#000000",
+    val extrusion3D: Double = 5.5,
+    val extrusionColor: String = "#3B1104",
+    val outerGlowRadius: Double = 7.5,
+    val outerGlowColor: String = "#FF7A00",
+    val innerGlowRadius: Double = 4.5,
+    val innerGlowColor: String = "#FFF3B0",
+    val innerGlowAlpha: Double = 0.62
+)
+
+/**
+ * Handles Persian/Dari/Arabic/Pashto/Urdu Unicode normalization, contextual joining
+ * preservation (ZWNJ & Kashida tatweel), and BiDi directional isolation for both
+ * Jetpack Compose live preview and Android Canvas / HarfBuzz export rendering.
+ */
+object RtlTextShaper {
+    private val rtlCodePointRegex = Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]")
+
+    fun containsRtl(text: String): Boolean = rtlCodePointRegex.containsMatchIn(text)
+
+    /**
+     * Normalizes Arabic Yeh/Kaf variants to standard Persian/Farsi codepoints (\u06CC, \u06A9)
+     * while preserving ZWNJ (\u200C) half-spaces and Kashida (\u0640) decorative extensions
+     * (e.g., "نازیــــه") so HarfBuzz ligatures and contextual forms shape without breaks.
+     */
+    fun normalizePersianText(input: String): String {
+        if (input.isEmpty()) return input
+        val sb = StringBuilder(input.length)
+        for (ch in input) {
+            when (ch) {
+                '\u064A', '\u0649' -> sb.append('\u06CC') // Farsi Yeh
+                '\u0643' -> sb.append('\u06A9')           // Farsi Keheh
+                else -> sb.append(ch)
+            }
+        }
+        return sb.toString().trim()
+    }
+
+    /**
+     * Wraps an RTL line with Unicode Right-to-Left Isolate / Embedding markers when mixed
+     * with Latin tokens, numbers, or punctuation so visual alignment never flips in LTR hosts.
+     */
+    fun shapeLineForRtlDisplay(input: String, forceRtl: Boolean = true): String {
+        val normalized = normalizePersianText(input)
+        if (normalized.isEmpty()) return normalized
+        val isRtl = forceRtl || containsRtl(normalized)
+        if (!isRtl) return normalized
+        // Strip existing stray BiDi overrides before wrapping cleanly
+        val clean = normalized.replace("\u200F", "").replace("\u202B", "").replace("\u202C", "")
+        return "\u200F$clean"
+    }
+
+    /**
+     * Orders word timings for horizontal rendering while preserving each word's internal
+     * cursive glyph joining.
+     */
+    fun orderWordsForVisualLine(words: List<WordTiming>, isRtlLine: Boolean): List<WordTiming> {
+        return if (isRtlLine) words.reversed() else words
     }
 }
 
@@ -122,8 +210,112 @@ data class SubtitleStyle(
     val threeTierLayout: Boolean = false,
     val tier1Color: String = "#FFFFFF",
     val tier2Color: String = "#FF7A00",
-    val tier3Color: String = "#FACC15"
-)
+    val tier3Color: String = "#FACC15",
+    // Distinct per-component layered text effect parameters for Headline (Tier 2) vs Sub-Headlines (Tiers 1 & 3)
+    val headlineFont: String = "Lalezar",
+    val subHeadlineFont: String = "Vazirmatn",
+    val headlineStrokeWidth: Double = 5.0,
+    val headlineStrokeColor: String = "#090612",
+    val subHeadlineStrokeWidth: Double = 3.4,
+    val subHeadlineStrokeColor: String = "#090612",
+    val headlineShadowDepth: Double = 6.5,
+    val headlineShadowBlur: Double = 12.0,
+    val headlineShadowColor: String = "#000000",
+    val subHeadlineShadowDepth: Double = 3.8,
+    val subHeadlineShadowBlur: Double = 7.5,
+    val subHeadlineShadowColor: String = "#000000",
+    val headlineInnerGlow: Double = 4.5,
+    val headlineInnerGlowColor: String = "#FFF3B0",
+    val subHeadlineInnerGlow: Double = 1.8,
+    val subHeadlineInnerGlowColor: String = "#E2E8F0"
+) {
+    /**
+     * Resolves the layered effect configuration (distinct stroke, drop-shadow, 3D extrusion,
+     * outer bloom, and inner glow) for a specific tier (1 = Top Sub-Headline, 2 = Hero Headline, 3 = Bottom Sub-Headline).
+     */
+    fun resolveTierLayerStyle(tierIndex: Int): CaptionTierStyle {
+        return when (tierIndex) {
+            2 -> CaptionTierStyle(
+                tierIndex = 2,
+                fontFamily = if (font.equals("Vazirmatn", ignoreCase = true) || font.equals("Lalezar", ignoreCase = true)) {
+                    headlineFont.ifBlank { "Lalezar" }
+                } else {
+                    font
+                },
+                fontWeight = 900,
+                fontScale = 1.98,
+                fillColor = tier2Color.ifBlank { textColor },
+                secondaryColor = secondaryColor.ifBlank { "#FFB800" },
+                tertiaryColor = tertiaryColor.ifBlank { "#D93800" },
+                useGradient = true,
+                strokeWidth = max(headlineStrokeWidth, outline * 1.15),
+                strokeColor = headlineStrokeColor.ifBlank { outlineColor },
+                dropShadowDepth = max(headlineShadowDepth, shadowDepth * 1.15),
+                dropShadowBlur = max(headlineShadowBlur, shadowBlur * 1.25),
+                dropShadowColor = headlineShadowColor.ifBlank { shadowColor },
+                extrusion3D = max(5.5, extrusion3D),
+                extrusionColor = "#3B1104",
+                outerGlowRadius = max(7.0, glow),
+                outerGlowColor = glowColor.ifBlank { "#FF7A00" },
+                innerGlowRadius = max(2.5, headlineInnerGlow),
+                innerGlowColor = headlineInnerGlowColor.ifBlank { "#FFF3B0" },
+                innerGlowAlpha = 0.65
+            )
+            1 -> CaptionTierStyle(
+                tierIndex = 1,
+                fontFamily = if (font.equals("Lalezar", ignoreCase = true)) {
+                    subHeadlineFont.ifBlank { "Vazirmatn" }
+                } else {
+                    font
+                },
+                fontWeight = 800,
+                fontScale = 0.88,
+                fillColor = tier1Color.ifBlank { "#FFFFFF" },
+                secondaryColor = secondaryColor,
+                tertiaryColor = tertiaryColor,
+                useGradient = false,
+                strokeWidth = max(subHeadlineStrokeWidth, outline * 0.85),
+                strokeColor = subHeadlineStrokeColor.ifBlank { outlineColor },
+                dropShadowDepth = max(subHeadlineShadowDepth, shadowDepth * 0.85),
+                dropShadowBlur = max(subHeadlineShadowBlur, shadowBlur * 0.90),
+                dropShadowColor = subHeadlineShadowColor.ifBlank { shadowColor },
+                extrusion3D = max(2.0, extrusion3D * 0.38),
+                extrusionColor = "#110C1D",
+                outerGlowRadius = 0.0,
+                outerGlowColor = glowColor,
+                innerGlowRadius = max(1.0, subHeadlineInnerGlow),
+                innerGlowColor = subHeadlineInnerGlowColor.ifBlank { "#E2E8F0" },
+                innerGlowAlpha = 0.42
+            )
+            else -> CaptionTierStyle(
+                tierIndex = 3,
+                fontFamily = if (font.equals("Lalezar", ignoreCase = true)) {
+                    subHeadlineFont.ifBlank { "Vazirmatn" }
+                } else {
+                    font
+                },
+                fontWeight = 800,
+                fontScale = 0.92,
+                fillColor = tier3Color.ifBlank { "#FFFFFF" },
+                secondaryColor = secondaryColor,
+                tertiaryColor = tertiaryColor,
+                useGradient = false,
+                strokeWidth = max(subHeadlineStrokeWidth, outline * 0.85),
+                strokeColor = subHeadlineStrokeColor.ifBlank { outlineColor },
+                dropShadowDepth = max(subHeadlineShadowDepth, shadowDepth * 0.85),
+                dropShadowBlur = max(subHeadlineShadowBlur, shadowBlur * 0.90),
+                dropShadowColor = subHeadlineShadowColor.ifBlank { shadowColor },
+                extrusion3D = max(2.0, extrusion3D * 0.38),
+                extrusionColor = "#110C1D",
+                outerGlowRadius = 0.0,
+                outerGlowColor = glowColor,
+                innerGlowRadius = max(1.0, subHeadlineInnerGlow),
+                innerGlowColor = subHeadlineInnerGlowColor.ifBlank { "#E2E8F0" },
+                innerGlowAlpha = 0.42
+            )
+        }
+    }
+}
 
 data class StylePresetItem(
     val id: String,
@@ -144,7 +336,7 @@ object StylePresetCatalog {
             category = "3-Tier RTL",
             badgeText = "3-TIER REF #1",
             previewSample = "ویزای تحصیلی • فنلاند • بدون مدرک زبان",
-            description = "Three-tier Persian kinetic layout from Reference Video 1: crisp white top line, massive orange-gold 3D hero headline with dark extrusion & optical flare, and white bottom line (no boxy background).",
+            description = "Three-tier Persian kinetic layout from Reference Video 1: crisp white top sub-headline, massive orange-gold 3D hero headline with dark extrusion, inner glow & optical flare, and white bottom sub-headline.",
             defaultSfx = "Punchy Pop",
             style = SubtitleStyle(
                 preset = "Cinematic Orange Persian",
@@ -175,7 +367,23 @@ object StylePresetCatalog {
                 threeTierLayout = true,
                 tier1Color = "#FFFFFF",
                 tier2Color = "#FF7A00",
-                tier3Color = "#FFFFFF"
+                tier3Color = "#FFFFFF",
+                headlineFont = "Lalezar",
+                subHeadlineFont = "Vazirmatn",
+                headlineStrokeWidth = 5.2,
+                headlineStrokeColor = "#090612",
+                subHeadlineStrokeWidth = 3.5,
+                subHeadlineStrokeColor = "#090612",
+                headlineShadowDepth = 6.8,
+                headlineShadowBlur = 12.0,
+                headlineShadowColor = "#000000",
+                subHeadlineShadowDepth = 4.0,
+                subHeadlineShadowBlur = 7.5,
+                subHeadlineShadowColor = "#000000",
+                headlineInnerGlow = 4.8,
+                headlineInnerGlowColor = "#FFF3B0",
+                subHeadlineInnerGlow = 2.0,
+                subHeadlineInnerGlowColor = "#E2E8F0"
             )
         ),
         StylePresetItem(
@@ -673,7 +881,9 @@ data class Track(
     val visible: Boolean = true,
     val locked: Boolean = false,
     val style: SubtitleStyle = SubtitleStyle(),
-    val captions: List<CaptionCue> = emptyList()
+    val captions: List<CaptionCue> = emptyList(),
+    val isDemoTrack: Boolean = false,
+    val transcriptionSource: String = "manual"
 )
 
 @Serializable
@@ -1007,11 +1217,13 @@ object SampleProjectsFactory {
             tracks = listOf(
                 Track(
                     id = "tr_fa_main",
-                    name = "Persian 3-Tier Kinetic (FA)",
+                    name = "[DEMO] Persian 3-Tier Kinetic (FA)",
                     language = "fa",
                     color = "#FF7A00",
                     visible = true,
                     style = flagshipStyle,
+                    isDemoTrack = true,
+                    transcriptionSource = "demo_showcase",
                     captions = listOf(
                         CaptionCue(
                             id = "v1_c1",
@@ -1022,6 +1234,8 @@ object SampleProjectsFactory {
                             tier2Text = "فنلاند",
                             tier3Text = "بدون مدرک زبان",
                             entranceSfx = "Fast Whoosh",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = listOf(
                                 WordTiming(0.25, 0.70, "ویزای", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
                                 WordTiming(0.70, 1.15, "تحصیلی", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
@@ -1040,6 +1254,8 @@ object SampleProjectsFactory {
                             tier2Text = "نازیــــه",
                             tier3Text = "است",
                             entranceSfx = "Cinematic Swoosh",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = listOf(
                                 WordTiming(3.25, 3.75, "ویزه", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
                                 WordTiming(3.75, 4.25, "خانم", customColor = "#FFFFFF", scaleBoost = 1.05, animation = "Slide", tier = 1),
@@ -1056,6 +1272,8 @@ object SampleProjectsFactory {
                             tier2Text = "مهاجرت",
                             tier3Text = "و کار دانشجویی",
                             entranceSfx = "Transition Hit",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = listOf(
                                 WordTiming(6.45, 6.90, "بهترین", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
                                 WordTiming(6.90, 7.35, "فرصت", customColor = "#FFFFFF", scaleBoost = 1.0, animation = "Slide", tier = 1),
@@ -1074,6 +1292,8 @@ object SampleProjectsFactory {
                             tier2Text = "فنلاند",
                             tier3Text = "بنویسید",
                             entranceSfx = "Fast Whoosh",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = listOf(
                                 WordTiming(9.45, 9.85, "در", customColor = "#FFFFFF", tier = 1),
                                 WordTiming(9.85, 10.30, "کامنت", customColor = "#FFFFFF", tier = 1),
@@ -1085,10 +1305,12 @@ object SampleProjectsFactory {
                 ),
                 Track(
                     id = "tr_en_sub",
-                    name = "English Bilingual (EN)",
+                    name = "[DEMO] English Bilingual (EN)",
                     language = "en",
                     color = "#06B6D4",
                     visible = false,
+                    isDemoTrack = true,
+                    transcriptionSource = "demo_showcase",
                     style = SubtitleStyle(
                         preset = "Modern Minimal",
                         font = "Inter",
@@ -1110,6 +1332,8 @@ object SampleProjectsFactory {
                             start = 0.25,
                             end = 3.10,
                             text = "Finland Study Visa • No Language Certificate",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = SrtParser.buildWordTimings("Finland Study Visa • No Language Certificate", 0.25, 3.10)
                         ),
                         CaptionCue(
@@ -1117,6 +1341,8 @@ object SampleProjectsFactory {
                             start = 3.25,
                             end = 6.30,
                             text = "This is Ms. Nazia's approved visa",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = SrtParser.buildWordTimings("This is Ms. Nazia's approved visa", 3.25, 6.30)
                         ),
                         CaptionCue(
@@ -1124,6 +1350,8 @@ object SampleProjectsFactory {
                             start = 6.45,
                             end = 9.30,
                             text = "Best opportunity for migration & student work",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = SrtParser.buildWordTimings("Best opportunity for migration & student work", 6.45, 9.30)
                         ),
                         CaptionCue(
@@ -1131,6 +1359,8 @@ object SampleProjectsFactory {
                             start = 9.45,
                             end = 11.85,
                             text = "Comment FINLAND below right now",
+                            isDemoSubtitle = true,
+                            transcriptionSource = "demo_showcase",
                             words = SrtParser.buildWordTimings("Comment FINLAND below right now", 9.45, 11.85)
                         )
                     )
